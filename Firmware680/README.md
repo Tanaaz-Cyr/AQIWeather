@@ -37,13 +37,15 @@ I2C_SDA_PIN = 18  # Alternative SDA pin
    - `main.py` - Main firmware
    - `wifi.json` - WiFi credentials
 
-2. **Configure WiFi and Backend:**
+2. **Configure WiFi, Backend, Port, and Data Interval:**
    Edit `wifi.json`:
    ```json
    {
      "ssid": "YourWiFiNetwork",
      "password": "YourPassword",
-     "backend_url": "http://your-server-ip:8811/temprec"
+     "backend_url": "http://your-server-ip:8811/temprec",
+     "port": 8811,
+     "data_interval": 300
    }
    ```
    
@@ -51,12 +53,22 @@ I2C_SDA_PIN = 18  # Alternative SDA pin
    - WiFi network name (SSID)
    - WiFi password
    - Backend server URL (where you want to send sensor data)
+   - Port: Server port number (default: 8811)
+     - The port in `backend_url` will be overridden by this value if specified
+     - Must be between 1 and 65535
+   - Data interval: Time in seconds between readings (minimum: 60 seconds)
+     - `300` = 5 minutes (default)
+     - `600` = 10 minutes
+     - `1800` = 30 minutes
+     - `3600` = 1 hour
 
 4. **Run:**
    The firmware will start automatically on boot if `main.py` is the main file.
 
 ## Features
 
+- ✅ **Power-efficient** - Deep sleep mode for battery operation (~10µA in sleep)
+- ✅ **Battery optimized** - WiFi disconnected after data transmission
 - ✅ **Robust error handling** - Retries for sensor reads and HTTP requests
 - ✅ **WiFi reconnection** - Automatically reconnects if WiFi drops
 - ✅ **Data validation** - Checks sensor readings are within valid ranges
@@ -65,18 +77,114 @@ I2C_SDA_PIN = 18  # Alternative SDA pin
 - ✅ **Gas resistance** - BME680 includes gas sensor (air quality)
 - ✅ **Auto-reset** - Resets device if critical errors occur
 
+## Power Management & Battery Operation
+
+This firmware is optimized for battery-powered operation using ESP32 deep sleep mode.
+
+### Power Consumption
+
+- **Active mode**: ~80-150mA (when awake, reading sensor, WiFi connected)
+- **Deep sleep mode**: ~10µA (between readings)
+- **Typical cycle**: Wakes up → Reads sensor → Connects WiFi → Sends data → Disconnects WiFi → Deep sleep
+
+### Battery Life Estimation
+
+With a 2000mAh battery and 5-minute intervals:
+- **Active time per cycle**: ~5-10 seconds
+- **Sleep time per cycle**: ~290 seconds
+- **Average current**: ~2-3mA
+- **Estimated battery life**: ~30-40 days
+
+To extend battery life:
+- Increase `DATA_INTERVAL` (e.g., 600 seconds = 10 minutes)
+- Ensure strong WiFi signal (faster connection = less power)
+- Use a larger battery capacity
+
+### Power Configuration
+
+**Data Interval** (in `wifi.json`):
+```json
+{
+  "data_interval": 300
+}
+```
+- Time in seconds between sensor readings
+- Minimum: 60 seconds (1 minute)
+- Default: 300 seconds (5 minutes)
+- Longer intervals = better battery life
+
+**Advanced Settings** (in `main.py`):
+```python
+# Power management
+USE_DEEP_SLEEP = True  # Set to False to disable deep sleep (for debugging)
+DISCONNECT_WIFI_AFTER_SEND = True  # Disconnect WiFi after sending to save power
+
+# Timeouts
+BACKEND_TIMEOUT = 10  # HTTP timeout
+WIFI_CONNECT_TIMEOUT = 30  # WiFi connection timeout
+```
+
+### Battery Setup Recommendations
+
+1. **Battery Selection**:
+   - Use a 3.7V Li-ion or LiPo battery (2000mAh+ recommended)
+   - Add a voltage regulator if needed (ESP32 needs 3.3V)
+   - Consider a TP4056 charging module for rechargeable batteries
+
+2. **Power Supply**:
+   - ESP32 can run directly from 3.3V or use onboard regulator (if available)
+   - Ensure stable power during WiFi transmission (high current draw)
+
+3. **Hardware Modifications** (Optional):
+   - Remove power LED if present (saves ~1-2mA)
+   - Use external pull-up resistors instead of internal (slightly lower power)
+   - Consider using a low-dropout regulator (LDO) for better efficiency
+
+4. **Testing**:
+   - Set `USE_DEEP_SLEEP = False` initially to test functionality
+   - Monitor serial output to verify operation
+   - Once working, enable deep sleep for battery operation
+
 ## Configuration Options
 
-Edit these values in `main.py`:
+### WiFi Configuration (`wifi.json`)
+
+All user-configurable settings are in `wifi.json`:
+
+```json
+{
+  "ssid": "YourWiFiNetwork",
+  "password": "YourPassword",
+  "backend_url": "http://your-server-ip:8811/temprec",
+  "port": 8811,
+  "data_interval": 300
+}
+```
+
+- **backend_url**: Full URL to the backend server endpoint
+  - Example: `"http://192.168.1.100:8811/temprec"`
+  - The port in this URL will be overridden by the `port` field if specified
+
+- **port**: Server port number (optional)
+  - Default: 8811
+  - Range: 1-65535
+  - If specified, this port will replace the port in `backend_url`
+  - Useful for easily changing the port without editing the full URL
+
+- **data_interval**: Time in seconds between sensor readings
+  - Minimum: 60 seconds (1 minute)
+  - Default: 300 seconds (5 minutes)
+  - Longer intervals = better battery life
+  - Examples: 300 (5 min), 600 (10 min), 1800 (30 min), 3600 (1 hour)
+
+### Advanced Settings (`main.py`)
+
+For advanced users, these can be modified in `main.py`:
 
 ```python
-# Data collection interval (seconds)
-DATA_INTERVAL = 300  # 5 minutes
-
-# Retry settings
-SENSOR_READ_RETRIES = 3
-HTTP_RETRIES = 3
-MAX_WIFI_RETRIES = 5
+# Power management
+USE_DEEP_SLEEP = True  # Enable deep sleep for battery operation
+DISCONNECT_WIFI_AFTER_SEND = True  # Disconnect WiFi after sending data
 
 # Timeouts
 BACKEND_TIMEOUT = 10  # HTTP timeout
@@ -100,6 +208,13 @@ WIFI_CONNECT_TIMEOUT = 30  # WiFi connection timeout
 - Check backend URL is correct
 - Ensure firewall allows connections
 - Check network connectivity
+
+### Battery/Power Issues
+- **Device not waking up**: Check battery voltage (should be >3.0V)
+- **Short battery life**: Increase `DATA_INTERVAL` to reduce wake frequency
+- **WiFi connection fails**: Ensure strong signal (weak signal = more power)
+- **Deep sleep not working**: Set `USE_DEEP_SLEEP = False` to debug
+- **Serial monitor not working**: Deep sleep resets the device; use a separate power source for debugging
 
 ## Data Format
 
