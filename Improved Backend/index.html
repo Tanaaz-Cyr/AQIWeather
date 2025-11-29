@@ -1,0 +1,1582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather Monitoring Dashboard - BME680</title>
+    <link rel="icon" type="image/png" href="./sun-icon-31.png">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@2.0.0/dist/chartjs-adapter-luxon.bundle.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --secondary-color: #1e40af;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --background-color: #f1f5f9;
+            --card-background: #ffffff;
+            --text-color: #1e293b;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --border-radius: 12px;
+            --box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --box-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: var(--text-color);
+            min-height: 100vh;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1.5rem 2rem;
+            box-shadow: var(--box-shadow);
+            margin-bottom: 2rem;
+        }
+
+        .header h1 {
+            margin: 0;
+            color: var(--text-color);
+            font-size: 2rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .header h1 i {
+            color: var(--primary-color);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 2rem 2rem;
+        }
+
+        .current-values {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .current-value-box {
+            background: var(--card-background);
+            padding: 1.5rem;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            transition: all 0.3s ease;
+            border: 1px solid var(--border-color);
+        }
+
+        .current-value-box:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--box-shadow-lg);
+        }
+
+        .current-value-box h3 {
+            margin: 0 0 0.75rem 0;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .current-value-box h3 i {
+            color: var(--primary-color);
+            font-size: 1.25rem;
+        }
+
+        .current-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-color);
+            margin: 0;
+        }
+
+        .current-value-unit {
+            font-size: 1rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .controls {
+            background: var(--card-background);
+            padding: 1.5rem;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            margin-bottom: 2rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .date-selection {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .date-input-group {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .date-input-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .date-input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: all 0.2s;
+            background: white;
+        }
+
+        .date-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        .get-data-btn {
+            background: var(--primary-color);
+            color: white;
+            padding: 0.75rem 2rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            align-self: flex-end;
+            margin-top: 1.5rem;
+        }
+
+        .get-data-btn:hover:not(:disabled) {
+            background: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: var(--box-shadow);
+        }
+
+        .get-data-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            display: none;
+            color: var(--primary-color);
+            font-size: 1.125rem;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .loading i {
+            animation: spin 1s linear infinite;
+            margin-right: 0.5rem;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .chart-container {
+            background: var(--card-background);
+            padding: 1.5rem;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            margin-bottom: 2rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .chart-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-color);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .chart-title i {
+            color: var(--primary-color);
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 400px;
+        }
+
+        .stats-container {
+            background: var(--card-background);
+            padding: 1.5rem;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            margin-bottom: 2rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .stats-container h2 {
+            margin: 0 0 1.5rem 0;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .stat-box {
+            background: var(--background-color);
+            padding: 1.25rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .stat-box h3 {
+            margin: 0 0 1rem 0;
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .stat-box h3 i {
+            color: var(--primary-color);
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .stat-row:last-child {
+            border-bottom: none;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .stat-value {
+            font-weight: 700;
+            color: var(--text-color);
+            font-size: 1rem;
+        }
+
+        .error-message {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            border: 1px solid #fecaca;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 1rem 1rem;
+            }
+
+            .header {
+                padding: 1rem;
+            }
+
+            .header h1 {
+                font-size: 1.5rem;
+            }
+
+            .date-selection {
+                flex-direction: column;
+            }
+
+            .get-data-btn {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .chart-wrapper {
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container" style="max-width: 1400px; margin: 0 auto; padding: 0 2rem;">
+            <h1><i class="fas fa-cloud-sun"></i> Weather Monitoring Dashboard</h1>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Current Values -->
+        <div class="current-values">
+            <div class="current-value-box">
+                <h3><i class="fas fa-temperature-high"></i> Temperature</h3>
+                <p class="current-value"><span id="currentTemp">-</span><span class="current-value-unit">°C</span></p>
+            </div>
+            <div class="current-value-box">
+                <h3><i class="fas fa-tint"></i> Humidity</h3>
+                <p class="current-value"><span id="currentHum">-</span><span class="current-value-unit">%</span></p>
+            </div>
+            <div class="current-value-box">
+                <h3><i class="fas fa-compress-alt"></i> Pressure</h3>
+                <p class="current-value"><span id="currentPres">-</span><span class="current-value-unit">hPa</span></p>
+            </div>
+            <div class="current-value-box">
+                <h3><i class="fas fa-wind"></i> Gas Resistance</h3>
+                <p class="current-value"><span id="currentGas">-</span><span class="current-value-unit">Ω</span></p>
+            </div>
+            <div class="current-value-box">
+                <h3><i class="fas fa-smog"></i> Air Quality (AQI)</h3>
+                <p class="current-value"><span id="currentAQI">-</span><span class="current-value-unit" id="aqiUnit"></span></p>
+            </div>
+            <div class="current-value-box">
+                <h3><i class="fas fa-clock"></i> Last Updated</h3>
+                <p class="current-value" style="font-size: 1.25rem;"><span id="lastUpdated">-</span></p>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <div class="date-selection">
+                <div class="date-input-group">
+                    <label for="startDate"><i class="fas fa-calendar-alt"></i> Start Date & Time</label>
+                    <input type="datetime-local" id="startDate" class="date-input">
+                </div>
+                <div class="date-input-group">
+                    <label for="endDate"><i class="fas fa-calendar-alt"></i> End Date & Time</label>
+                    <input type="datetime-local" id="endDate" class="date-input">
+                </div>
+                <button onclick="getData()" class="get-data-btn" id="getDataBtn">
+                    <i class="fas fa-search"></i> Get Data
+                </button>
+            </div>
+        </div>
+
+        <!-- Error Message -->
+        <div class="error-message" id="errorMessage"></div>
+
+        <!-- Loading -->
+        <div class="loading" id="loading">
+            <i class="fas fa-spinner"></i> Loading data...
+        </div>
+
+        <!-- Charts -->
+        <div class="chart-container">
+            <div class="chart-title"><i class="fas fa-temperature-high"></i> Temperature</div>
+            <div class="chart-wrapper">
+                <canvas id="temperatureChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-title"><i class="fas fa-tint"></i> Humidity</div>
+            <div class="chart-wrapper">
+                <canvas id="humidityChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-title"><i class="fas fa-compress-alt"></i> Pressure</div>
+            <div class="chart-wrapper">
+                <canvas id="pressureChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container" id="gasChartContainer" style="display: none;">
+            <div class="chart-title"><i class="fas fa-wind"></i> Gas Resistance</div>
+            <div class="chart-wrapper">
+                <canvas id="gasChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container" id="aqiChartContainer" style="display: none;">
+            <div class="chart-title"><i class="fas fa-smog"></i> Air Quality Index (AQI)</div>
+            <div class="chart-wrapper">
+                <canvas id="aqiChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Statistics -->
+        <div class="stats-container" id="statsContainer" style="display: none;">
+            <h2><i class="fas fa-chart-bar"></i> Statistics</h2>
+            <div class="stats-grid" id="statsGrid"></div>
+        </div>
+    </div>
+
+    <script>
+        // Chart instances
+        let temperatureChart, humidityChart, pressureChart, gasChart, aqiChart;
+        
+        // IST timezone offset (UTC+5:30)
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+        // Initialize charts
+        function initCharts() {
+            // Check if Chart.js is loaded
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not loaded');
+                showError('Chart.js library failed to load. Please refresh the page.');
+                return false;
+            }
+
+            // Use category scale instead of time scale to avoid adapter issues
+            // We'll format the labels manually when updating charts
+            const useTimeScale = false; // Disabled to avoid adapter dependency issues
+
+            // Check if canvas elements exist
+            const tempCanvas = document.getElementById('temperatureChart');
+            const humCanvas = document.getElementById('humidityChart');
+            const presCanvas = document.getElementById('pressureChart');
+            const gasCanvas = document.getElementById('gasChart');
+            const aqiCanvas = document.getElementById('aqiChart');
+
+            if (!tempCanvas || !humCanvas || !presCanvas) {
+                console.error('Canvas elements not found');
+                showError('Chart canvas elements not found. Please refresh the page.');
+                return false;
+            }
+
+            try {
+                // Create base chart options
+                const baseChartOptions = {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                title: function(context) {
+                                    const label = context[0].label;
+                                    if (label instanceof Date || (typeof label === 'string' && label.includes('T'))) {
+                                        const date = new Date(label);
+                                        return date.toLocaleString('en-IN', {
+                                            timeZone: 'Asia/Kolkata',
+                                            day: '2-digit',
+                                            month: '2-digit',
+                                            year: 'numeric',
+                                            hour: '2-digit',
+                                            minute: '2-digit',
+                                            second: '2-digit',
+                                            hour12: true
+                                        });
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                };
+
+                // Create scale configuration based on adapter availability
+                let xScaleConfig;
+                if (useTimeScale) {
+                    xScaleConfig = {
+                        type: 'time',
+                        time: {
+                            timeZone: 'Asia/Kolkata',
+                            displayFormats: {
+                                hour: 'HH:mm',
+                                day: 'MMM dd',
+                                month: 'MMM yyyy'
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Time (IST)'
+                        },
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 0
+                        }
+                    };
+                } else {
+                    // Fallback to category scale with formatted labels
+                    xScaleConfig = {
+                        type: 'category',
+                        title: {
+                            display: true,
+                            text: 'Time (IST)'
+                        },
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 0,
+                            autoSkip: true, // Auto-skip for readability
+                            maxTicksLimit: 50, // Show up to 50 labels
+                            callback: function(value, index, ticks) {
+                                // This will be set when data is loaded
+                                // The value is the label string we set
+                                return value;
+                            }
+                        }
+                    };
+                }
+
+                const chartOptions = {
+                    ...baseChartOptions,
+                    scales: {
+                        x: xScaleConfig,
+                        y: {
+                            beginAtZero: false
+                        }
+                    }
+                };
+
+            temperatureChart = new Chart(tempCanvas, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Temperature (°C)',
+                        borderColor: 'rgb(239, 68, 68)',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        tension: 0.4,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        y: {
+                            ...chartOptions.scales.y,
+                            title: {
+                                display: true,
+                                text: 'Temperature (°C)'
+                            }
+                        }
+                    }
+                }
+            });
+
+            humidityChart = new Chart(humCanvas, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Humidity (%)',
+                        borderColor: 'rgb(59, 130, 246)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        tension: 0.4,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        y: {
+                            ...chartOptions.scales.y,
+                            title: {
+                                display: true,
+                                text: 'Humidity (%)'
+                            },
+                            min: 0,
+                            max: 100
+                        }
+                    }
+                }
+            });
+
+            pressureChart = new Chart(presCanvas, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Pressure (hPa)',
+                        borderColor: 'rgb(16, 185, 129)',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.4,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        y: {
+                            ...chartOptions.scales.y,
+                            title: {
+                                display: true,
+                                text: 'Pressure (hPa)'
+                            }
+                        }
+                    }
+                }
+            });
+
+            if (gasCanvas) {
+                gasChart = new Chart(gasCanvas, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Gas Resistance (Ω)',
+                            borderColor: 'rgb(168, 85, 247)',
+                            backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                            tension: 0.4,
+                            pointRadius: 0,
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        ...chartOptions,
+                        scales: {
+                            ...chartOptions.scales,
+                            y: {
+                                ...chartOptions.scales.y,
+                                title: {
+                                    display: true,
+                                    text: 'Gas Resistance (Ω)'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            if (aqiCanvas) {
+                aqiChart = new Chart(aqiCanvas, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'AQI',
+                            borderColor: 'rgb(239, 68, 68)',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            tension: 0.4,
+                            pointRadius: 0,
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        ...chartOptions,
+                        scales: {
+                            ...chartOptions.scales,
+                            y: {
+                                ...chartOptions.scales.y,
+                                title: {
+                                    display: true,
+                                    text: 'AQI'
+                                },
+                                min: 0,
+                                max: 500
+                            }
+                        },
+                        plugins: {
+                            ...chartOptions.plugins,
+                            annotation: {
+                                annotations: {
+                                    good: {
+                                        type: 'box',
+                                        yMin: 0,
+                                        yMax: 50,
+                                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                        borderColor: 'rgba(16, 185, 129, 0.3)',
+                                        borderWidth: 1
+                                    },
+                                    moderate: {
+                                        type: 'box',
+                                        yMin: 51,
+                                        yMax: 100,
+                                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                        borderColor: 'rgba(59, 130, 246, 0.3)',
+                                        borderWidth: 1
+                                    },
+                                    unhealthySensitive: {
+                                        type: 'box',
+                                        yMin: 101,
+                                        yMax: 150,
+                                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                                        borderColor: 'rgba(245, 158, 11, 0.3)',
+                                        borderWidth: 1
+                                    },
+                                    unhealthy: {
+                                        type: 'box',
+                                        yMin: 151,
+                                        yMax: 200,
+                                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                        borderColor: 'rgba(239, 68, 68, 0.3)',
+                                        borderWidth: 1
+                                    },
+                                    veryUnhealthy: {
+                                        type: 'box',
+                                        yMin: 201,
+                                        yMax: 300,
+                                        backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                                        borderColor: 'rgba(139, 92, 246, 0.3)',
+                                        borderWidth: 1
+                                    },
+                                    hazardous: {
+                                        type: 'box',
+                                        yMin: 301,
+                                        yMax: 500,
+                                        backgroundColor: 'rgba(127, 29, 29, 0.1)',
+                                        borderColor: 'rgba(127, 29, 29, 0.3)',
+                                        borderWidth: 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            console.log('Charts initialized successfully');
+            return true;
+            } catch (error) {
+                console.error('Error initializing charts:', error);
+                showError('Failed to initialize charts: ' + error.message);
+                return false;
+            }
+        }
+
+        // Update charts with data
+        function updateCharts(data) {
+            if (!data || !Array.isArray(data) || data.length === 0) {
+                showError('No data available for the selected date range');
+                return;
+            }
+
+            console.log(`Updating charts with ${data.length} data points`);
+
+            // Ensure charts are initialized, try to initialize if not
+            if (!temperatureChart || !humidityChart || !pressureChart) {
+                console.warn('Charts not initialized, attempting to initialize...');
+                if (!initCharts()) {
+                    showError('Charts not initialized. Please refresh the page.');
+                    return;
+                }
+            }
+
+            // Filter out only completely invalid data points (missing all core fields)
+            const validData = data.filter(item => {
+                return item && 
+                       item.timestamp &&
+                       item.temperature !== undefined && 
+                       item.humidity !== undefined && 
+                       item.pressure !== undefined;
+            });
+
+            if (validData.length === 0) {
+                showError('No valid data available for the selected date range');
+                return;
+            }
+
+            // Parse timestamps for all valid data
+            const validTimestamps = validData.map(item => {
+                const date = new Date(item.timestamp);
+                if (isNaN(date.getTime())) {
+                    return null;
+                }
+                return date;
+            }).filter(ts => ts !== null);
+
+            // Ensure we have matching arrays
+            if (validTimestamps.length !== validData.length) {
+                console.warn('Timestamp count mismatch, filtering...');
+                const alignedData = [];
+                const alignedTimestamps = [];
+                for (let i = 0; i < validData.length; i++) {
+                    if (validTimestamps[i] !== null) {
+                        alignedData.push(validData[i]);
+                        alignedTimestamps.push(validTimestamps[i]);
+                    }
+                }
+                validData = alignedData;
+                validTimestamps = alignedTimestamps;
+            }
+
+            const temperatures = validData.map(item => item.temperature || 0);
+            const humidities = validData.map(item => item.humidity || 0);
+            const pressures = validData.map(item => item.pressure || 0);
+            const gasResistances = validData.map(item => item.gas_resistance).filter(g => g !== undefined && g !== null);
+            const aqis = validData.map(item => item.aqi).filter(a => a !== undefined && a !== null);
+
+            // Format timestamps for display
+            // Show date when date changes (at 12:00 AM), otherwise show time only (HH:MM AM/PM)
+            // For better performance with many data points, we'll show labels strategically
+            const formattedLabels = validTimestamps.map((ts, index) => {
+                // Convert UTC timestamp to IST
+                const istDateStr = ts.toLocaleString('en-US', { 
+                    timeZone: 'Asia/Kolkata',
+                    year: 'numeric',
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: 'numeric',
+                    hour12: false
+                });
+                const istDate = new Date(istDateStr);
+                
+                // Get IST date components using UTC methods since we're working with a converted date
+                const istYear = istDate.getFullYear();
+                const istMonth = istDate.getMonth();
+                const istDay = istDate.getDate();
+                const hours = istDate.getHours();
+                const minutes = istDate.getMinutes();
+                const isMidnight = hours === 0 && minutes === 0;
+                
+                // Check if date changed from previous point
+                let showDate = false;
+                if (index === 0 || isMidnight) {
+                    // Always show date for first point or at midnight
+                    showDate = true;
+                } else {
+                    // Check if date changed from previous point
+                    const prevIstDateStr = validTimestamps[index - 1].toLocaleString('en-US', { 
+                        timeZone: 'Asia/Kolkata',
+                        year: 'numeric',
+                        month: 'numeric',
+                        day: 'numeric'
+                    });
+                    const prevIstDate = new Date(prevIstDateStr);
+                    const currentDateStr = `${istYear}-${istMonth}-${istDay}`;
+                    const prevDateStr = `${prevIstDate.getFullYear()}-${prevIstDate.getMonth()}-${prevIstDate.getDate()}`;
+                    showDate = currentDateStr !== prevDateStr;
+                }
+                
+                // Format time as HH:MM AM/PM (12-hour format)
+                const hour12 = hours === 0 ? 12 : (hours > 12 ? hours - 12 : hours);
+                const ampm = hours >= 12 ? 'PM' : 'AM';
+                const timeStr = `${hour12.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+                
+                if (showDate) {
+                    // Format date as "MMM DD, YYYY" (e.g., "Jan 12, 2025")
+                    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                    const month = monthNames[istMonth];
+                    return `${month} ${istDay}, ${istYear} ${timeStr}`;
+                } else {
+                    return timeStr;
+                }
+            });
+            
+            console.log(`Formatted ${formattedLabels.length} labels. First: ${formattedLabels[0]}, Last: ${formattedLabels[formattedLabels.length - 1]}`);
+
+            // Update temperature chart
+            if (temperatureChart && temperatureChart.data) {
+                // Check if using time scale or category scale
+                const isTimeScale = temperatureChart.options.scales.x.type === 'time';
+                if (isTimeScale) {
+                    temperatureChart.data.datasets[0].data = validTimestamps.map((ts, i) => ({
+                        x: ts,
+                        y: temperatures[i]
+                    }));
+                } else {
+                    temperatureChart.data.labels = formattedLabels;
+                    temperatureChart.data.datasets[0].data = temperatures;
+                    // Update scale to show more labels, prioritizing date changes
+                    temperatureChart.options.scales.x.ticks.autoSkip = true;
+                    temperatureChart.options.scales.x.ticks.maxTicksLimit = Math.min(100, formattedLabels.length); // Show more labels
+                    // Custom callback to prioritize showing labels with dates
+                    temperatureChart.options.scales.x.ticks.callback = function(value, index, ticks) {
+                        // Get the actual label string from the labels array
+                        const label = formattedLabels[index];
+                        if (label && typeof label === 'string' && label.includes(',')) {
+                            // Always show labels that contain dates (have comma after month)
+                            return label;
+                        }
+                        // For other labels, return the label string
+                        return label || value;
+                    };
+                }
+                temperatureChart.update('none');
+            }
+
+            // Update humidity chart
+            if (humidityChart && humidityChart.data) {
+                const isTimeScale = humidityChart.options.scales.x.type === 'time';
+                if (isTimeScale) {
+                    humidityChart.data.datasets[0].data = validTimestamps.map((ts, i) => ({
+                        x: ts,
+                        y: humidities[i]
+                    }));
+                } else {
+                    humidityChart.data.labels = formattedLabels;
+                    humidityChart.data.datasets[0].data = humidities;
+                    humidityChart.options.scales.x.ticks.autoSkip = true;
+                    humidityChart.options.scales.x.ticks.maxTicksLimit = Math.min(100, formattedLabels.length);
+                    humidityChart.options.scales.x.ticks.callback = function(value, index, ticks) {
+                        const label = formattedLabels[index];
+                        if (label && typeof label === 'string' && label.includes(',')) {
+                            return label;
+                        }
+                        return label || value;
+                    };
+                }
+                humidityChart.update('none');
+            }
+
+            // Update pressure chart
+            if (pressureChart && pressureChart.data) {
+                const isTimeScale = pressureChart.options.scales.x.type === 'time';
+                if (isTimeScale) {
+                    pressureChart.data.datasets[0].data = validTimestamps.map((ts, i) => ({
+                        x: ts,
+                        y: pressures[i]
+                    }));
+                } else {
+                    pressureChart.data.labels = formattedLabels;
+                    pressureChart.data.datasets[0].data = pressures;
+                    pressureChart.options.scales.x.ticks.autoSkip = true;
+                    pressureChart.options.scales.x.ticks.maxTicksLimit = Math.min(100, formattedLabels.length);
+                    pressureChart.options.scales.x.ticks.callback = function(value, index, ticks) {
+                        const label = formattedLabels[index];
+                        if (label && typeof label === 'string' && label.includes(',')) {
+                            return label;
+                        }
+                        return label || value;
+                    };
+                }
+                pressureChart.update('none');
+            }
+
+            // Update gas resistance chart if data available
+            if (gasResistances.length > 0 && gasChart && gasChart.data) {
+                const gasContainer = document.getElementById('gasChartContainer');
+                if (gasContainer) {
+                    gasContainer.style.display = 'block';
+                }
+                const gasDataPoints = validTimestamps
+                    .map((ts, i) => validData[i] && validData[i].gas_resistance !== undefined && validData[i].gas_resistance !== null ? {
+                        timestamp: ts,
+                        value: validData[i].gas_resistance,
+                        index: i
+                    } : null)
+                    .filter(d => d !== null);
+                
+                const isTimeScale = gasChart.options.scales.x.type === 'time';
+                if (isTimeScale) {
+                    gasChart.data.datasets[0].data = gasDataPoints.map(d => ({
+                        x: d.timestamp,
+                        y: d.value
+                    }));
+                } else {
+                    // Format labels for gas chart using same logic as main charts
+                    const gasLabels = gasDataPoints.map((d, idx) => {
+                        const istDateStr = d.timestamp.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+                        const istDate = new Date(istDateStr);
+                        
+                        const istYear = istDate.getFullYear();
+                        const istMonth = istDate.getMonth();
+                        const istDay = istDate.getDate();
+                        const hours = istDate.getHours();
+                        const minutes = istDate.getMinutes();
+                        const isMidnight = hours === 0 && minutes === 0;
+                        
+                        let showDate = false;
+                        if (idx === 0 || isMidnight) {
+                            showDate = true;
+                        } else {
+                            const prevIstDateStr = gasDataPoints[idx - 1].timestamp.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+                            const prevIstDate = new Date(prevIstDateStr);
+                            const currentDateStr = `${istYear}-${istMonth}-${istDay}`;
+                            const prevDateStr = `${prevIstDate.getFullYear()}-${prevIstDate.getMonth()}-${prevIstDate.getDate()}`;
+                            showDate = currentDateStr !== prevDateStr;
+                        }
+                        
+                        const hour12 = hours === 0 ? 12 : (hours > 12 ? hours - 12 : hours);
+                        const ampm = hours >= 12 ? 'PM' : 'AM';
+                        const timeStr = `${hour12.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+                        
+                        if (showDate) {
+                            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                            const month = monthNames[istMonth];
+                            return `${month} ${istDay}, ${istYear} ${timeStr}`;
+                        } else {
+                            return timeStr;
+                        }
+                    });
+                    gasChart.data.labels = gasLabels;
+                    gasChart.data.datasets[0].data = gasDataPoints.map(d => d.value);
+                }
+                gasChart.update('none');
+            } else {
+                const gasContainer = document.getElementById('gasChartContainer');
+                if (gasContainer) {
+                    gasContainer.style.display = 'none';
+                }
+            }
+
+            // Update AQI chart if data available
+            if (aqis.length > 0 && aqiChart && aqiChart.data) {
+                const aqiContainer = document.getElementById('aqiChartContainer');
+                if (aqiContainer) {
+                    aqiContainer.style.display = 'block';
+                }
+                const aqiDataPoints = validTimestamps
+                    .map((ts, i) => validData[i] && validData[i].aqi !== undefined && validData[i].aqi !== null ? {
+                        timestamp: ts,
+                        value: validData[i].aqi,
+                        index: i
+                    } : null)
+                    .filter(d => d !== null);
+                
+                const isTimeScale = aqiChart.options.scales.x.type === 'time';
+                if (isTimeScale) {
+                    aqiChart.data.datasets[0].data = aqiDataPoints.map(d => ({
+                        x: d.timestamp,
+                        y: d.value
+                    }));
+                } else {
+                    // Format labels for AQI chart using same logic as main charts
+                    const aqiLabels = aqiDataPoints.map((d, idx) => {
+                        const istDateStr = d.timestamp.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+                        const istDate = new Date(istDateStr);
+                        
+                        const istYear = istDate.getFullYear();
+                        const istMonth = istDate.getMonth();
+                        const istDay = istDate.getDate();
+                        const hours = istDate.getHours();
+                        const minutes = istDate.getMinutes();
+                        const isMidnight = hours === 0 && minutes === 0;
+                        
+                        let showDate = false;
+                        if (idx === 0 || isMidnight) {
+                            showDate = true;
+                        } else {
+                            const prevIstDateStr = aqiDataPoints[idx - 1].timestamp.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+                            const prevIstDate = new Date(prevIstDateStr);
+                            const currentDateStr = `${istYear}-${istMonth}-${istDay}`;
+                            const prevDateStr = `${prevIstDate.getFullYear()}-${prevIstDate.getMonth()}-${prevIstDate.getDate()}`;
+                            showDate = currentDateStr !== prevDateStr;
+                        }
+                        
+                        const hour12 = hours === 0 ? 12 : (hours > 12 ? hours - 12 : hours);
+                        const ampm = hours >= 12 ? 'PM' : 'AM';
+                        const timeStr = `${hour12.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+                        
+                        if (showDate) {
+                            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                            const month = monthNames[istMonth];
+                            return `${month} ${istDay}, ${istYear} ${timeStr}`;
+                        } else {
+                            return timeStr;
+                        }
+                    });
+                    aqiChart.data.labels = aqiLabels;
+                    aqiChart.data.datasets[0].data = aqiDataPoints.map(d => d.value);
+                }
+                aqiChart.update('none');
+            } else {
+                const aqiContainer = document.getElementById('aqiChartContainer');
+                if (aqiContainer) {
+                    aqiContainer.style.display = 'none';
+                }
+            }
+
+            // Update statistics
+            updateStatistics(data);
+        }
+
+        // Update statistics
+        function updateStatistics(data) {
+            if (!data || !Array.isArray(data) || data.length === 0) {
+                return;
+            }
+
+            // Filter out invalid data
+            const validData = data.filter(d => d && 
+                d.temperature !== undefined && 
+                d.humidity !== undefined && 
+                d.pressure !== undefined);
+
+            if (validData.length === 0) {
+                return;
+            }
+
+            const temps = validData.map(d => d.temperature || 0);
+            const hums = validData.map(d => d.humidity || 0);
+            const pres = validData.map(d => d.pressure || 0);
+            const gas = validData.map(d => d.gas_resistance).filter(g => g !== undefined && g !== null && g > 0);
+            const aqis = validData.map(d => d.aqi).filter(a => a !== undefined && a !== null && a >= 0);
+
+            const stats = {
+                temperature: {
+                    max: Math.max(...temps),
+                    min: Math.min(...temps),
+                    avg: temps.reduce((a, b) => a + b, 0) / temps.length
+                },
+                humidity: {
+                    max: Math.max(...hums),
+                    min: Math.min(...hums),
+                    avg: hums.reduce((a, b) => a + b, 0) / hums.length
+                },
+                pressure: {
+                    max: Math.max(...pres),
+                    min: Math.min(...pres),
+                    avg: pres.reduce((a, b) => a + b, 0) / pres.length
+                }
+            };
+
+            if (gas.length > 0) {
+                stats.gas_resistance = {
+                    max: Math.max(...gas),
+                    min: Math.min(...gas),
+                    avg: gas.reduce((a, b) => a + b, 0) / gas.length
+                };
+            }
+
+            if (aqis.length > 0) {
+                stats.aqi = {
+                    max: Math.max(...aqis),
+                    min: Math.min(...aqis),
+                    avg: aqis.reduce((a, b) => a + b, 0) / aqis.length
+                };
+            }
+
+            const statsGrid = document.getElementById('statsGrid');
+            statsGrid.innerHTML = '';
+
+            // Temperature stats
+            statsGrid.innerHTML += `
+                <div class="stat-box">
+                    <h3><i class="fas fa-temperature-high"></i> Temperature</h3>
+                    <div class="stat-row">
+                        <span class="stat-label">Maximum</span>
+                        <span class="stat-value">${stats.temperature.max.toFixed(2)}°C</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Minimum</span>
+                        <span class="stat-value">${stats.temperature.min.toFixed(2)}°C</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Average</span>
+                        <span class="stat-value">${stats.temperature.avg.toFixed(2)}°C</span>
+                    </div>
+                </div>
+            `;
+
+            // Humidity stats
+            statsGrid.innerHTML += `
+                <div class="stat-box">
+                    <h3><i class="fas fa-tint"></i> Humidity</h3>
+                    <div class="stat-row">
+                        <span class="stat-label">Maximum</span>
+                        <span class="stat-value">${stats.humidity.max.toFixed(2)}%</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Minimum</span>
+                        <span class="stat-value">${stats.humidity.min.toFixed(2)}%</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Average</span>
+                        <span class="stat-value">${stats.humidity.avg.toFixed(2)}%</span>
+                    </div>
+                </div>
+            `;
+
+            // Pressure stats
+            statsGrid.innerHTML += `
+                <div class="stat-box">
+                    <h3><i class="fas fa-compress-alt"></i> Pressure</h3>
+                    <div class="stat-row">
+                        <span class="stat-label">Maximum</span>
+                        <span class="stat-value">${stats.pressure.max.toFixed(2)}hPa</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Minimum</span>
+                        <span class="stat-value">${stats.pressure.min.toFixed(2)}hPa</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Average</span>
+                        <span class="stat-value">${stats.pressure.avg.toFixed(2)}hPa</span>
+                    </div>
+                </div>
+            `;
+
+            // Gas resistance stats (if available)
+            if (stats.gas_resistance) {
+                statsGrid.innerHTML += `
+                    <div class="stat-box">
+                        <h3><i class="fas fa-wind"></i> Gas Resistance</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Maximum</span>
+                            <span class="stat-value">${Math.round(stats.gas_resistance.max)}Ω</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Minimum</span>
+                            <span class="stat-value">${Math.round(stats.gas_resistance.min)}Ω</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Average</span>
+                            <span class="stat-value">${Math.round(stats.gas_resistance.avg)}Ω</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // AQI stats (if available)
+            if (stats.aqi) {
+                const getAQICategory = (aqi) => {
+                    if (aqi <= 50) return { text: 'Good', color: '#10b981' };
+                    if (aqi <= 100) return { text: 'Moderate', color: '#3b82f6' };
+                    if (aqi <= 150) return { text: 'Unhealthy for Sensitive', color: '#f59e0b' };
+                    if (aqi <= 200) return { text: 'Unhealthy', color: '#ef4444' };
+                    if (aqi <= 300) return { text: 'Very Unhealthy', color: '#a855f7' };
+                    return { text: 'Hazardous', color: '#7f1d1d' };
+                };
+
+                const avgCategory = getAQICategory(Math.round(stats.aqi.avg));
+                statsGrid.innerHTML += `
+                    <div class="stat-box">
+                        <h3><i class="fas fa-smog"></i> Air Quality Index (AQI)</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Maximum</span>
+                            <span class="stat-value" style="color: ${getAQICategory(Math.round(stats.aqi.max)).color}">${Math.round(stats.aqi.max)}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Minimum</span>
+                            <span class="stat-value" style="color: ${getAQICategory(Math.round(stats.aqi.min)).color}">${Math.round(stats.aqi.min)}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Average</span>
+                            <span class="stat-value" style="color: ${avgCategory.color}">${Math.round(stats.aqi.avg)} (${avgCategory.text})</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            document.getElementById('statsContainer').style.display = 'block';
+        }
+
+        // Get data from server
+        async function getData() {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+
+            if (!startDate || !endDate) {
+                showError('Please select both start and end dates');
+                return;
+            }
+
+            // Convert datetime-local input to UTC for API
+            // datetime-local format: "YYYY-MM-DDTHH:mm" (no timezone info)
+            // We need to interpret this as IST (Asia/Kolkata, UTC+5:30) and convert to UTC
+            
+            // Parse the datetime-local string and treat it as IST
+            // Format: "YYYY-MM-DDTHH:mm"
+            const parseISTDateTime = (dateTimeLocal) => {
+                // Split the datetime string
+                const [datePart, timePart] = dateTimeLocal.split('T');
+                const [year, month, day] = datePart.split('-').map(Number);
+                const [hours, minutes] = timePart.split(':').map(Number);
+                
+                // Create a date string with explicit IST timezone offset (+05:30)
+                // Format: "YYYY-MM-DDTHH:mm:ss+05:30"
+                const istDateString = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00+05:30`;
+                
+                // Parse the date string - JavaScript will automatically convert IST to UTC
+                const date = new Date(istDateString);
+                
+                // Verify the conversion worked
+                if (isNaN(date.getTime())) {
+                    console.error('Failed to parse date:', dateTimeLocal);
+                    // Fallback: treat as local time
+                    return new Date(dateTimeLocal);
+                }
+                
+                return date;
+            };
+            
+            const startDateTime = parseISTDateTime(startDate);
+            const endDateTime = parseISTDateTime(endDate);
+            
+            // Log for debugging - show both local and UTC times
+            console.log('=== Date Range Request ===');
+            console.log('Input Start Date (IST):', startDate);
+            console.log('Input End Date (IST):', endDate);
+            console.log('Parsed Start DateTime (IST):', startDateTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }));
+            console.log('Parsed End DateTime (IST):', endDateTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }));
+            console.log('Start DateTime (UTC):', startDateTime.toISOString());
+            console.log('End DateTime (UTC):', endDateTime.toISOString());
+            console.log('Date range span:', Math.round((endDateTime - startDateTime) / (1000 * 60 * 60 * 24) * 100) / 100, 'days');
+
+            if (endDateTime <= startDateTime) {
+                showError('End date must be after start date');
+                return;
+            }
+
+            hideError();
+            showLoading(true);
+            document.getElementById('getDataBtn').disabled = true;
+
+            try {
+                const response = await fetch('/tempdaterange', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        startDate: startDateTime.toISOString(),
+                        endDate: endDateTime.toISOString()
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server error: ${errorText}`);
+                }
+
+                const responseData = await response.json();
+                
+                // Handle error responses
+                if (responseData.error || (responseData.message && !Array.isArray(responseData))) {
+                    throw new Error(responseData.error || responseData.message || 'Unknown server error');
+                }
+                
+                // Ensure data is an array
+                const data = Array.isArray(responseData) ? responseData : [];
+                
+                console.log(`=== Data Received ===`);
+                console.log(`Total data points: ${data.length}`);
+                if (data.length > 0) {
+                    const firstDate = new Date(data[0].timestamp);
+                    const lastDate = new Date(data[data.length - 1].timestamp);
+                    console.log('First timestamp (UTC):', data[0].timestamp);
+                    console.log('First timestamp (IST):', firstDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }));
+                    console.log('Last timestamp (UTC):', data[data.length - 1].timestamp);
+                    console.log('Last timestamp (IST):', lastDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }));
+                    console.log('Data span:', Math.round((lastDate - firstDate) / (1000 * 60 * 60 * 24) * 100) / 100, 'days');
+                    
+                    // Check if we got the full range
+                    const requestedStart = new Date(startDateTime.toISOString());
+                    const requestedEnd = new Date(endDateTime.toISOString());
+                    if (firstDate > requestedStart) {
+                        console.warn('⚠️ First data point is AFTER requested start date!');
+                        console.warn('  Requested start:', requestedStart.toISOString());
+                        console.warn('  First data point:', firstDate.toISOString());
+                    }
+                    if (lastDate < requestedEnd) {
+                        console.warn('⚠️ Last data point is BEFORE requested end date!');
+                        console.warn('  Requested end:', requestedEnd.toISOString());
+                        console.warn('  Last data point:', lastDate.toISOString());
+                    }
+                } else {
+                    console.warn('⚠️ No data received for the requested date range!');
+                }
+                
+                if (data.length === 0) {
+                    throw new Error('No data available for the selected date range');
+                }
+
+                updateCharts(data);
+            } catch (error) {
+                console.error('Error:', error);
+                showError('Error fetching data: ' + error.message);
+            } finally {
+                showLoading(false);
+                document.getElementById('getDataBtn').disabled = false;
+            }
+        }
+
+        // Update current values
+        async function updateCurrentValues() {
+            try {
+                const response = await fetch('/temp');
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                const data = await response.json();
+                
+                document.getElementById('currentTemp').textContent = data.temperature.toFixed(2);
+                document.getElementById('currentHum').textContent = data.humidity.toFixed(2);
+                document.getElementById('currentPres').textContent = data.pressure.toFixed(2);
+                
+                if (data.gas_resistance) {
+                    document.getElementById('currentGas').textContent = Math.round(data.gas_resistance);
+                } else {
+                    document.getElementById('currentGas').textContent = 'N/A';
+                }
+
+                if (data.aqi !== undefined && data.aqi !== null) {
+                    const aqi = data.aqi;
+                    document.getElementById('currentAQI').textContent = aqi;
+                    
+                    // Set AQI color and category
+                    const aqiElement = document.getElementById('currentAQI');
+                    const aqiUnit = document.getElementById('aqiUnit');
+                    
+                    if (aqi <= 50) {
+                        aqiElement.style.color = '#10b981';
+                        aqiUnit.textContent = ' (Good)';
+                    } else if (aqi <= 100) {
+                        aqiElement.style.color = '#3b82f6';
+                        aqiUnit.textContent = ' (Moderate)';
+                    } else if (aqi <= 150) {
+                        aqiElement.style.color = '#f59e0b';
+                        aqiUnit.textContent = ' (Unhealthy for Sensitive)';
+                    } else if (aqi <= 200) {
+                        aqiElement.style.color = '#ef4444';
+                        aqiUnit.textContent = ' (Unhealthy)';
+                    } else if (aqi <= 300) {
+                        aqiElement.style.color = '#a855f7';
+                        aqiUnit.textContent = ' (Very Unhealthy)';
+                    } else {
+                        aqiElement.style.color = '#7f1d1d';
+                        aqiUnit.textContent = ' (Hazardous)';
+                    }
+                } else {
+                    document.getElementById('currentAQI').textContent = 'N/A';
+                    document.getElementById('aqiUnit').textContent = '';
+                }
+                
+                // Convert timestamp to IST
+                const date = new Date(data.timestamp);
+                document.getElementById('lastUpdated').textContent = date.toLocaleString('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true
+                });
+            } catch (error) {
+                console.error('Error fetching current values:', error);
+            }
+        }
+
+        // Utility functions
+        function showLoading(show) {
+            const loading = document.getElementById('loading');
+            if (show) {
+                loading.classList.add('show');
+            } else {
+                loading.classList.remove('show');
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.classList.add('show');
+        }
+
+        function hideError() {
+            document.getElementById('errorMessage').classList.remove('show');
+        }
+
+        // Set default date range (last 7 days)
+        function setDefaultDateRange() {
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 7);
+
+            // Format for datetime-local input (YYYY-MM-DDTHH:mm)
+            const formatDate = (date) => {
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                return `${year}-${month}-${day}T${hours}:${minutes}`;
+            };
+
+            document.getElementById('startDate').value = formatDate(startDate);
+            document.getElementById('endDate').value = formatDate(endDate);
+        }
+
+        // Initialize on page load
+        window.onload = function() {
+            // Wait for Chart.js and adapter to be fully loaded
+            function checkLibraries() {
+                if (typeof Chart === 'undefined') {
+                    return false;
+                }
+                // Give adapter a moment to register
+                return true;
+            }
+
+            if (!checkLibraries()) {
+                // Retry after a short delay
+                setTimeout(function() {
+                    if (!checkLibraries()) {
+                        showError('Chart.js library failed to load. Please check your internet connection and refresh the page.');
+                        return;
+                    }
+                    initializeApp();
+                }, 500);
+            } else {
+                // Small delay to ensure adapter is registered
+                setTimeout(initializeApp, 100);
+            }
+        };
+
+        function initializeApp() {
+            // Initialize charts
+            if (!initCharts()) {
+                console.error('Chart initialization failed');
+                return;
+            }
+            
+            // Set default date range
+            setDefaultDateRange();
+            
+            // Update current values
+            updateCurrentValues();
+            
+            // Update current values every 30 seconds
+            setInterval(updateCurrentValues, 30000);
+        }
+    </script>
+</body>
+</html>
+

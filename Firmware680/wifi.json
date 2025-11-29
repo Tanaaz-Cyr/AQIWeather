@@ -1,0 +1,5 @@
+{
+  "ssid": "YourWiFiNetwork",
+  "password": "YourPassword",
+  "backend_url": "http://your-server-ip:8811/temprec"
+}
