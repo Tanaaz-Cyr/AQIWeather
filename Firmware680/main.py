@@ -4,7 +4,7 @@ Power-efficient version optimized for battery operation
 Uses deep sleep mode to minimize power consumption
 """
 
-from machine import Pin, I2C, deepsleep
+from machine import Pin, I2C, deepsleep, reset
 import bme680
 import time
 import json
@@ -334,6 +334,15 @@ def main():
             print(f"Error in main loop: {e}")
             import sys
             sys.print_exception(e)
+            
+            # If WiFi connection failed after 3 attempts, restart the ESP32
+            if isinstance(e, RuntimeError) and "WiFi connection failed" in str(e):
+                print("\n" + "="*50)
+                print("WiFi connection failed after 3 attempts")
+                print("Restarting ESP32 in 5 seconds...")
+                print("="*50)
+                time.sleep(5)  # Give time for message to be visible
+                reset()  # Restart the ESP32
         
         # Calculate time spent awake and adjust sleep duration
         time_awake = time.time() - cycle_start_time
