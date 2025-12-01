@@ -542,6 +542,50 @@ def read_sensor_data(sensor):
             "error": str(e)
         }
 
+def send_chunked(cl, data, chunk_size=512):
+    """Send data in chunks to avoid memory issues on ESP32."""
+    try:
+        # Ensure data is bytes
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        
+        # Send data in chunks
+        total_sent = 0
+        total_len = len(data)
+        chunk_num = 0
+        
+        while total_sent < total_len:
+            chunk = data[total_sent:total_sent + chunk_size]
+            
+            try:
+                sent = cl.send(chunk)
+                
+                if sent == 0:
+                    print(f"ERROR: sent 0 bytes at chunk {chunk_num}")
+                    break
+                
+                total_sent += sent
+                chunk_num += 1
+                
+                # Small delay every 10 chunks
+                if chunk_num % 10 == 0:
+                    time.sleep(0.005)
+                    
+            except OSError as e:
+                print(f"OSError sending chunk {chunk_num}: {e}")
+                break
+            except Exception as e:
+                print(f"Error sending chunk {chunk_num}: {e}")
+                break
+        
+        print(f"Sent {total_sent}/{total_len} bytes in {chunk_num} chunks")
+        return total_sent
+    except Exception as e:
+        print(f"ERROR in send_chunked: {e}")
+        import sys
+        sys.print_exception(e)
+        return 0
+
 def load_html(is_ap_mode=False):
     """Load index.html file."""
     try:
@@ -908,13 +952,10 @@ def get_default_html(is_ap_mode=False):
 
 def web_server_thread(sensor, wifi_config, is_ap_mode=False):
     """Web server thread to handle HTTP requests."""
+    s = None
     try:
-        # Bind to all interfaces (0.0.0.0) to work in both AP and STA modes
-        addr = socket.getaddrinfo('0.0.0.0', WEB_SERVER_PORT)[0][-1]
-        s = socket.socket()
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(addr)
-        s.listen(5)
+        # Wait a moment for network interface to be fully ready (especially important for AP mode)
+        time.sleep(1)
         
         # Determine which IP to display
         sta = network.WLAN(network.STA_IF)
@@ -924,15 +965,37 @@ def web_server_thread(sensor, wifi_config, is_ap_mode=False):
             ip = sta.ifconfig()[0]
         elif ap.active():
             ip = ap.ifconfig()[0]
+            # Extra wait for AP mode to ensure it's fully ready
+            time.sleep(1)
         else:
             ip = '0.0.0.0'
         
+        # Bind to all interfaces (0.0.0.0) to work in both AP and STA modes
+        print(f"Binding web server to 0.0.0.0:{WEB_SERVER_PORT}...")
+        addr = socket.getaddrinfo('0.0.0.0', WEB_SERVER_PORT)[0][-1]
+        s = socket.socket()
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Set socket to blocking mode (default, but explicit)
+        s.setblocking(True)
+        s.bind(addr)
+        s.listen(5)
+        
         print(f"Web server started on http://{ip}:{WEB_SERVER_PORT}")
+        print(f"Server is listening and ready to accept connections")
         
         while True:
             try:
                 cl, addr = s.accept()
+                # Set client socket to blocking and add timeout
+                cl.setblocking(True)
+                # Set a reasonable timeout for receiving data
+                cl.settimeout(5.0)
+                
                 request = cl.recv(1024).decode('utf-8')
+                if not request:
+                    cl.close()
+                    continue
+                    
                 request_line = request.split('\n')[0]
                 method_path = request_line.split(' ')
                 
@@ -949,47 +1012,110 @@ def web_server_thread(sensor, wifi_config, is_ap_mode=False):
                 
                 print(f"Request: {method} {path} from {addr[0]}")
                 
+                # Test endpoint
+                if path == '/test':
+                    cl.send('HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nTest OK - Server is working!')
+                    cl.close()
+                    continue
+                
                 # Serve index.html
                 if path == '/' or path == '/index.html':
-                    html = load_html(is_ap_mode)
-                    cl.send('HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n')
-                    cl.send(html)
+                    try:
+                        print("Serving HTML file...")
+                        
+                        # Send headers first
+                        headers = 'HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n'
+                        cl.send(headers)
+                        
+                        # Try to read and send file directly in chunks (more memory efficient)
+                        file_sent = False
+                        try:
+                            print("Opening index.html...")
+                            with open('index.html', 'r') as f:
+                                # Read and send file in chunks directly
+                                chunk_size = 512
+                                total_sent = 0
+                                ap_mode_replaced = False
+                                ap_mode_value = 'true' if is_ap_mode else 'false'
+                                
+                                while True:
+                                    chunk = f.read(chunk_size)
+                                    if not chunk:
+                                        break
+                                    
+                                    # Replace AP mode placeholder on first chunk if needed
+                                    if not ap_mode_replaced and 'const isAPMode = false; // <!--AP_MODE_CHECK-->' in chunk:
+                                        chunk = chunk.replace('const isAPMode = false; // <!--AP_MODE_CHECK-->', f'const isAPMode = {ap_mode_value};')
+                                        ap_mode_replaced = True
+                                    
+                                    # Send chunk
+                                    sent = cl.send(chunk)
+                                    if sent == 0:
+                                        print("Connection closed during send")
+                                        break
+                                    total_sent += sent
+                                
+                                print(f"File sent: {total_sent} bytes")
+                                file_sent = True
+                                
+                        except OSError as e:
+                            print(f"File not found: {e}, using default HTML")
+                        except Exception as e:
+                            print(f"Error reading file: {e}")
+                            import sys
+                            sys.print_exception(e)
+                        
+                        # If file sending failed, use default HTML
+                        if not file_sent:
+                            print("Using default HTML...")
+                            html = get_default_html(is_ap_mode)
+                            bytes_sent = send_chunked(cl, html, chunk_size=512)
+                            print(f"Default HTML sent: {bytes_sent} bytes")
+                            
+                    except Exception as e:
+                        print(f"ERROR serving HTML: {e}")
+                        import sys
+                        sys.print_exception(e)
+                        try:
+                            cl.send('HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/plain\r\n\r\nServer Error')
+                        except:
+                            pass
                 
                 # API endpoint for sensor data
                 elif path == '/api/sensor':
                     sensor_data = read_sensor_data(sensor)
-                    cl.send('HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n')
-                    cl.send(json.dumps(sensor_data))
+                    response = 'HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n' + json.dumps(sensor_data)
+                    cl.send(response)
                 
                 # API endpoint for WiFi network scanning (only in AP mode)
                 elif path == '/api/scan':
                     if not is_ap_mode:
                         # Don't scan if not in AP mode
                         error_response = {'networks': [], 'status': 'error', 'error': 'Not in AP mode'}
-                        cl.send('HTTP/1.0 403 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n')
-                        cl.send(json.dumps(error_response))
+                        response = 'HTTP/1.0 403 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n' + json.dumps(error_response)
+                        cl.send(response)
                     else:
                         try:
                             print("Scan request received, starting scan...")
                             networks = scan_wifi_networks()
                             response_data = {'networks': networks, 'status': 'ok'}
                             print(f"Sending {len(networks)} networks to client")
-                            cl.send('HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n')
-                            cl.send(json.dumps(response_data))
+                            response = 'HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n' + json.dumps(response_data)
+                            cl.send(response)
                         except Exception as e:
                             print(f"Error in scan endpoint: {e}")
                             import sys
                             sys.print_exception(e)
                             error_response = {'networks': [], 'status': 'error', 'error': str(e)}
-                            cl.send('HTTP/1.0 500 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n')
-                            cl.send(json.dumps(error_response))
+                            response = 'HTTP/1.0 500 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n' + json.dumps(error_response)
+                            cl.send(response)
                 
                 # API endpoint for WiFi configuration (only in AP mode)
                 elif path == '/api/config' and method == 'POST':
                     if not is_ap_mode:
                         # Don't allow config changes if not in AP mode
-                        cl.send('HTTP/1.0 403 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n')
-                        cl.send(json.dumps({'success': False, 'error': 'Not in AP mode'}))
+                        response = 'HTTP/1.0 403 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n' + json.dumps({'success': False, 'error': 'Not in AP mode'})
+                        cl.send(response)
                         cl.close()
                         continue
                     # Read POST data
@@ -1046,8 +1172,8 @@ def web_server_thread(sensor, wifi_config, is_ap_mode=False):
                         # Update the shared config dict
                         wifi_config.update(current_config)
                         
-                        cl.send('HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n')
-                        cl.send(json.dumps({'success': True, 'message': 'Configuration saved'}))
+                        response = 'HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n' + json.dumps({'success': True, 'message': 'Configuration saved'})
+                        cl.send(response)
                         cl.close()
                         
                         # Reboot after a short delay
@@ -1059,13 +1185,16 @@ def web_server_thread(sensor, wifi_config, is_ap_mode=False):
                         print(f"Error saving config: {e}")
                         import sys
                         sys.print_exception(e)
-                        cl.send('HTTP/1.0 400 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n')
-                        cl.send(json.dumps({'success': False, 'error': str(e)}))
+                        response = 'HTTP/1.0 400 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n' + json.dumps({'success': False, 'error': str(e)})
+                        cl.send(response)
                 
                 else:
-                    cl.send('HTTP/1.0 404 Not Found\r\n\r\n')
+                    # 404 Not Found
+                    cl.send('HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\n\r\n404 Not Found')
                 
+                # Close connection after response
                 cl.close()
+                print(f"Connection closed for {method} {path}")
                 
             except Exception as e:
                 print(f"Error handling request: {e}")
@@ -1078,6 +1207,11 @@ def web_server_thread(sensor, wifi_config, is_ap_mode=False):
         print(f"Web server error: {e}")
         import sys
         sys.print_exception(e)
+        if s is not None:
+            try:
+                s.close()
+            except:
+                pass
 
 # ============================================================================
 # MAIN PROGRAM
@@ -1157,6 +1291,9 @@ def main():
             try:
                 _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
                 print("Web server thread started")
+                # Give the web server thread time to bind and start listening
+                time.sleep(2)
+                print("Web server should be ready now. Connect to http://192.168.4.1")
             except Exception as e:
                 print(f"Warning: Could not start web server thread: {e}")
     except (RuntimeError, OSError) as e:
@@ -1176,6 +1313,9 @@ def main():
             try:
                 _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
                 print("Web server thread started")
+                # Give the web server thread time to bind and start listening
+                time.sleep(2)
+                print("Web server should be ready now. Connect to http://192.168.4.1")
             except Exception as e:
                 print(f"Warning: Could not start web server thread: {e}")
         else:
@@ -1191,6 +1331,9 @@ def main():
                 try:
                     _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
                     print("Web server thread started")
+                    # Give the web server thread time to bind and start listening
+                    time.sleep(2)
+                    print("Web server should be ready now. Connect to http://192.168.4.1")
                 except Exception as e2:
                     print(f"Warning: Could not start web server thread: {e2}")
             except Exception as ap_error:
@@ -1330,6 +1473,17 @@ def main():
                     start_ap_mode()
                     ap_mode_active = True
                     wifi_connected = False
+                    
+                    # Start web server in AP mode
+                    print("\nStarting web server...")
+                    try:
+                        _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
+                        print("Web server thread started")
+                        # Give the web server thread time to bind and start listening
+                        time.sleep(2)
+                        print("Web server should be ready now. Connect to http://192.168.4.1")
+                    except Exception as e:
+                        print(f"Warning: Could not start web server thread: {e}")
                     
                     # Wait for 5 minutes
                     start_time = time.time()
