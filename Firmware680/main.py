@@ -72,8 +72,8 @@ def led_on():
     if led is not None:
         try:
             led.on()
-        except:
-            pass
+        except Exception as e:
+            print(f"LED on error (non-critical): {e}")
 
 def led_off():
     """Turn LED off."""
@@ -81,8 +81,8 @@ def led_off():
     if led is not None:
         try:
             led.off()
-        except:
-            pass
+        except Exception as e:
+            print(f"LED off error (non-critical): {e}")
 
 def led_blink_thread(interval=0.5):
     """Blink LED in a separate thread."""
@@ -103,6 +103,8 @@ def led_blink_thread(interval=0.5):
 def start_led_blink(interval=0.5):
     """Start LED blinking in a separate thread."""
     global led_blink_thread_running
+    if led is None:
+        return  # Can't blink if LED not initialized
     stop_led_blink()  # Stop any existing blink thread
     try:
         _thread.start_new_thread(led_blink_thread, (interval,))
@@ -113,7 +115,7 @@ def stop_led_blink():
     """Stop LED blinking."""
     global led_blink_thread_running
     led_blink_thread_running = False
-    time.sleep(0.1)  # Give thread time to stop
+    time.sleep(0.15)  # Give thread time to stop
 
 def load_wifi_config():
     """Load WiFi credentials, backend URL, port, and data interval from wifi.json file."""
@@ -295,10 +297,25 @@ def ensure_wifi_connected(ssid, password):
     wifi = network.WLAN(network.STA_IF)
     if not wifi.isconnected():
         print("WiFi disconnected, reconnecting...")
-        return connect_wifi(ssid, password)
+        # Blink LED during reconnection
+        try:
+            start_led_blink(0.5)
+        except:
+            pass
+        wifi = connect_wifi(ssid, password, max_retries=1)
+        # LED off when connected
+        try:
+            stop_led_blink()
+            led_off()
+        except:
+            pass
+        return wifi
     # Make sure LED is off when connected
-    stop_led_blink()
-    led_off()
+    try:
+        stop_led_blink()
+        led_off()
+    except:
+        pass
     return wifi
 
 def disconnect_wifi():
@@ -352,29 +369,24 @@ def send_data(url, data, wifi, ssid, password):
     # Ensure WiFi is still connected before sending
     wifi = ensure_wifi_connected(ssid, password)
     
-    try:
-        response = requests.post(
-            url,
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=BACKEND_TIMEOUT
-        )
-        
-        if response.status_code == 200:
-            print(f"Data sent successfully: {response.text}")
-            response.close()
-            return True
-        else:
-            print(f"Server error: {response.status_code} - {response.text}")
-            response.close()
-            return False
-            
-    except Exception as e:
-        print(f"Error sending data: {e}")
-        # Try to reconnect if connection was lost
-        if not wifi.isconnected():
-            print("WiFi lost during send, will reconnect on next cycle")
-        return False
+    if not wifi.isconnected():
+        raise RuntimeError("WiFi not connected, cannot send data")
+    
+    print(f"Sending to {url}...")
+    response = requests.post(
+        url,
+        json=data,
+        headers={'Content-Type': 'application/json'},
+        timeout=BACKEND_TIMEOUT
+    )
+    
+    if response.status_code == 200:
+        print(f"Data sent successfully: {response.text}")
+        response.close()
+        return True
+    else:
+        response.close()
+        raise RuntimeError(f"Server returned error: {response.status_code} - {response.text}")
 
 def scan_wifi_networks():
     """Scan for available WiFi networks."""
@@ -1269,76 +1281,26 @@ def main():
     wifi_connected = False
     ap_mode_active = False
     
-    try:
-        if wifi_config.get('ssid') and wifi_config.get('password'):
-            print("\nAttempting to connect to WiFi...")
-            wifi = connect_wifi(wifi_config['ssid'], wifi_config['password'])
-            wifi_connected = True
-            print("WiFi connected successfully!")
-            # Start web server AFTER WiFi is connected
-            print("\nStarting web server...")
-            try:
-                _thread.start_new_thread(web_server_thread, (sensor, wifi_config, False))
-                print("Web server thread started")
-            except Exception as e:
-                print(f"Warning: Could not start web server thread: {e}")
-        else:
-            print("\nNo WiFi credentials found, starting AP mode...")
-            start_ap_mode()
-            ap_mode_active = True
-            # Start web server in AP mode
-            print("\nStarting web server...")
-            try:
-                _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
-                print("Web server thread started")
-                # Give the web server thread time to bind and start listening
-                time.sleep(2)
-                print("Web server should be ready now. Connect to http://192.168.4.1")
-            except Exception as e:
-                print(f"Warning: Could not start web server thread: {e}")
-    except (RuntimeError, OSError) as e:
-        # Catch both RuntimeError and OSError from WiFi connection failures
-        error_msg = str(e)
-        if "WiFi connection failed" in error_msg or "Wifi" in error_msg or "wifi" in error_msg:
-            print("\n" + "="*50)
-            print("WiFi connection failed!")
-            print(f"Error: {error_msg}")
-            print("Starting AP mode for 5 minutes...")
-            print("="*50)
-            start_ap_mode()
-            ap_mode_active = True
-            wifi_connected = False
-            # Start web server in AP mode
-            print("\nStarting web server...")
-            try:
-                _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
-                print("Web server thread started")
-                # Give the web server thread time to bind and start listening
-                time.sleep(2)
-                print("Web server should be ready now. Connect to http://192.168.4.1")
-            except Exception as e:
-                print(f"Warning: Could not start web server thread: {e}")
-        else:
-            # For other errors, still try to start AP mode as fallback
-            print(f"\nUnexpected error during WiFi connection: {e}")
-            print("Starting AP mode as fallback...")
-            try:
-                start_ap_mode()
-                ap_mode_active = True
-                wifi_connected = False
-                # Start web server in AP mode
-                print("\nStarting web server...")
-                try:
-                    _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
-                    print("Web server thread started")
-                    # Give the web server thread time to bind and start listening
-                    time.sleep(2)
-                    print("Web server should be ready now. Connect to http://192.168.4.1")
-                except Exception as e2:
-                    print(f"Warning: Could not start web server thread: {e2}")
-            except Exception as ap_error:
-                print(f"Failed to start AP mode: {ap_error}")
-                raise
+    if wifi_config.get('ssid') and wifi_config.get('password'):
+        print("\nAttempting to connect to WiFi...")
+        wifi = connect_wifi(wifi_config['ssid'], wifi_config['password'])
+        wifi_connected = True
+        print("WiFi connected successfully!")
+        # Start web server AFTER WiFi is connected
+        print("\nStarting web server...")
+        _thread.start_new_thread(web_server_thread, (sensor, wifi_config, False))
+        print("Web server thread started")
+    else:
+        print("\nNo WiFi credentials found, starting AP mode...")
+        start_ap_mode()
+        ap_mode_active = True
+        # Start web server in AP mode
+        print("\nStarting web server...")
+        _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
+        print("Web server thread started")
+        # Give the web server thread time to bind and start listening
+        time.sleep(2)
+        print("Web server should be ready now. Connect to http://192.168.4.1")
     
     # If in AP mode, wait for 5 minutes before rebooting
     if ap_mode_active and not wifi_connected:
@@ -1358,8 +1320,12 @@ def main():
                         print("WiFi configuration detected! Rebooting...")
                         time.sleep(2)
                         reset()
-            except:
-                pass
+            except Exception as e:
+                print(f"Error checking wifi.json: {e}")
+                # On any error reading config, reboot
+                print("Rebooting due to config read error...")
+                time.sleep(2)
+                reset()
             
             time.sleep(5)  # Check every 5 seconds
         
@@ -1368,16 +1334,28 @@ def main():
         reset()
     
     # Main loop - runs continuously if onBattery is False, or once if True (then deep sleep)
+    cycle_count = 0
     while True:
+        cycle_count += 1
         # Record start time to calculate actual sleep duration
         cycle_start_time = time.time()
         
+        print(f"\n{'='*50}")
+        print(f"Main loop cycle #{cycle_count}")
+        print(f"{'='*50}")
+        
         try:
             # Ensure WiFi is connected (will reconnect if needed)
-            if wifi_connected and wifi_config.get('ssid') and wifi_config.get('password'):
+            if wifi_config.get('ssid') and wifi_config.get('password'):
                 print("\nChecking WiFi connection...")
                 wifi = ensure_wifi_connected(wifi_config['ssid'], wifi_config['password'])
                 wifi_connected = True
+                # LED off when connected
+                try:
+                    stop_led_blink()
+                    led_off()
+                except:
+                    pass
             else:
                 # If no WiFi credentials, skip data sending but keep web server running
                 print("\nNo WiFi connection available, skipping data transmission")
@@ -1436,8 +1414,16 @@ def main():
             send_success = send_data(BACKEND_URL, data, wifi, wifi_config['ssid'], wifi_config['password'])
             if send_success:
                 print("✓ Success!")
+                # Quick LED blink to indicate success
+                try:
+                    led_on()
+                    time.sleep(0.1)
+                    led_off()
+                except:
+                    pass
             else:
-                print("✗ Failed to send data")
+                # This shouldn't happen as send_data now raises on error, but just in case
+                raise RuntimeError("Failed to send data to server")
             
             # Only disconnect WiFi if explicitly configured to save power (not recommended)
             if DISCONNECT_WIFI_AFTER_SEND:
@@ -1451,60 +1437,28 @@ def main():
                     print("Warning: WiFi disconnected, will reconnect on next cycle")
             
         except Exception as e:
-            print(f"Error in main loop: {e}")
+            print(f"\n{'='*50}")
+            print("ERROR in main loop - Rebooting ESP32")
+            print(f"{'='*50}")
+            print(f"Error: {e}")
             import sys
             sys.print_exception(e)
+            print(f"{'='*50}")
+            print("Rebooting in 3 seconds...")
+            print(f"{'='*50}\n")
             
-            # If WiFi connection failed, start AP mode
-            error_msg = str(e)
-            is_wifi_error = (
-                (isinstance(e, (RuntimeError, OSError)) and 
-                 ("WiFi connection failed" in error_msg or "Wifi" in error_msg or "wifi" in error_msg)) or
-                isinstance(e, OSError)
-            )
+            # Blink LED rapidly to indicate error before reboot
+            try:
+                for _ in range(5):
+                    led_on()
+                    time.sleep(0.2)
+                    led_off()
+                    time.sleep(0.2)
+            except:
+                pass
             
-            if is_wifi_error and not ap_mode_active:
-                print("\n" + "="*50)
-                print("WiFi connection failed in main loop!")
-                print(f"Error: {error_msg}")
-                print("Starting AP mode for 5 minutes...")
-                print("="*50)
-                try:
-                    start_ap_mode()
-                    ap_mode_active = True
-                    wifi_connected = False
-                    
-                    # Start web server in AP mode
-                    print("\nStarting web server...")
-                    try:
-                        _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
-                        print("Web server thread started")
-                        # Give the web server thread time to bind and start listening
-                        time.sleep(2)
-                        print("Web server should be ready now. Connect to http://192.168.4.1")
-                    except Exception as e:
-                        print(f"Warning: Could not start web server thread: {e}")
-                    
-                    # Wait for 5 minutes
-                    start_time = time.time()
-                    while time.time() - start_time < AP_MODE_DURATION:
-                        try:
-                            with open('wifi.json', 'r') as f:
-                                updated_config = json.load(f)
-                                if updated_config.get('ssid') and updated_config.get('ssid') != wifi_config.get('ssid', ''):
-                                    print("WiFi configuration detected! Rebooting...")
-                                    time.sleep(2)
-                                    reset()
-                        except:
-                            pass
-                        time.sleep(5)
-                    
-                    print("\n5 minutes elapsed. Rebooting device...")
-                    time.sleep(2)
-                    reset()
-                except Exception as ap_error:
-                    print(f"Failed to start AP mode: {ap_error}")
-                    # Continue with normal error handling
+            time.sleep(3)
+            reset()
         
         # Calculate time spent awake and adjust sleep duration
         time_awake = time.time() - cycle_start_time
@@ -1531,12 +1485,50 @@ def main():
             # Note: deepsleep() will restart the device, so this line won't be reached
         else:
             # AC Power mode: Keep running with delay (no deep sleep)
-            print(f"\nCycle completed in {time_awake:.1f}s")
+            print(f"\nCycle #{cycle_count} completed in {time_awake:.1f}s")
             print(f"Waiting {DATA_INTERVAL} seconds until next reading...")
             print("(AC Power mode - keeping device awake)")
             print("="*50)
-            time.sleep(DATA_INTERVAL)
+            
+            # Show periodic status during wait
+            wait_start = time.time()
+            status_interval = 30  # Show status every 30 seconds
+            while time.time() - wait_start < DATA_INTERVAL:
+                remaining = DATA_INTERVAL - (time.time() - wait_start)
+                if remaining <= status_interval:
+                    # Last status before next cycle
+                    print(f"Next cycle in {remaining:.0f} seconds...")
+                    break
+                time.sleep(status_interval)
+                remaining = DATA_INTERVAL - (time.time() - wait_start)
+                print(f"[Status] Waiting... {remaining:.0f} seconds until next cycle")
+            
             # Loop will continue, keeping device awake
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n{'='*50}")
+        print("FATAL ERROR during initialization - Rebooting ESP32")
+        print(f"{'='*50}")
+        print(f"Error: {e}")
+        import sys
+        sys.print_exception(e)
+        print(f"{'='*50}")
+        print("Rebooting in 3 seconds...")
+        print(f"{'='*50}\n")
+        
+        # Blink LED rapidly to indicate error before reboot
+        try:
+            led = Pin(LED_PIN, Pin.OUT)
+            for _ in range(5):
+                led.on()
+                time.sleep(0.2)
+                led.off()
+                time.sleep(0.2)
+        except:
+            pass
+        
+        time.sleep(3)
+        reset()
