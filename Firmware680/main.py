@@ -55,6 +55,10 @@ WEB_SERVER_PORT = 80
 led = None
 led_blink_thread_running = False
 
+# Sensor error tracking
+sensor_error_count = 0
+MAX_SENSOR_ERRORS = 3
+
 def init_led():
     """Initialize LED pin."""
     global led
@@ -199,6 +203,21 @@ def load_wifi_config():
         print(f"Error loading WiFi config: {e}")
         raise
 
+def reset_wifi_interface():
+    """Reset WiFi interface to recover from error states."""
+    wifi = network.WLAN(network.STA_IF)
+    try:
+        print("  Performing full WiFi interface reset...")
+        wifi.disconnect()
+        time.sleep(0.5)
+        wifi.active(False)
+        time.sleep(1)
+        wifi.active(True)
+        time.sleep(1)  # Give more time for interface to fully reset
+        print("  WiFi interface reset complete")
+    except Exception as e:
+        print(f"  Warning during WiFi reset: {e}")
+
 def connect_wifi(ssid, password, max_retries=1):
     """Connect to WiFi network with retry logic."""
     wifi = network.WLAN(network.STA_IF)
@@ -224,24 +243,30 @@ def connect_wifi(ssid, password, max_retries=1):
                     wifi.disconnect()
                     time.sleep(1)
                 
+                # Perform full reset on first attempt or if we've had errors
+                if attempt == 0 or attempt > 0:
+                    reset_wifi_interface()
+                
                 # Activate WiFi interface
                 if not wifi.active():
                     wifi.active(True)
-                    time.sleep(0.5)  # Give it time to activate
+                    time.sleep(1)  # Give more time to activate
                 
                 # Try to connect
                 print(f"Connecting to WiFi '{ssid}' (attempt {attempt + 1}/{max_retries})...")
                 try:
                     wifi.connect(ssid, password)
                 except OSError as e:
-                    # If already connecting or other error, disconnect and retry
-                    if "connecting" in str(e).lower() or "sta is connecting" in str(e).lower():
+                    error_str = str(e)
+                    # Handle various WiFi errors
+                    if "connecting" in error_str.lower() or "sta is connecting" in error_str.lower():
                         print(f"  WiFi interface busy, resetting...")
-                        wifi.disconnect()
-                        wifi.active(False)
-                        time.sleep(1)
-                        wifi.active(True)
-                        time.sleep(0.5)
+                        reset_wifi_interface()
+                        wifi.connect(ssid, password)
+                    elif "0x0101" in error_str or "unknown error" in error_str.lower():
+                        print(f"  WiFi unknown error detected, performing aggressive reset...")
+                        reset_wifi_interface()
+                        time.sleep(2)  # Extra wait for unknown errors
                         wifi.connect(ssid, password)
                     else:
                         raise
@@ -262,26 +287,43 @@ def connect_wifi(ssid, password, max_retries=1):
                     return wifi
                 else:
                     print("\n  Connection failed")
+                    # Check final status for debugging
+                    final_status = wifi.status()
+                    print(f"  Final WiFi status: {final_status}")
                     # Disconnect before retry (if max_retries > 1)
                     if attempt < max_retries - 1:
                         wifi.disconnect()
                         time.sleep(2)  # Wait before retry
                     
             except OSError as e:
+                error_str = str(e)
                 print(f"\n  WiFi error: {e}")
+                
+                # Handle unknown errors with aggressive reset
+                if "0x0101" in error_str or "unknown error" in error_str.lower():
+                    print("  Detected unknown WiFi error, performing aggressive reset...")
+                    reset_wifi_interface()
+                    time.sleep(2)  # Extra wait for unknown errors
+                
                 # Reset WiFi interface
                 try:
-                    wifi.disconnect()
-                    wifi.active(False)
-                    time.sleep(1)
-                    wifi.active(True)
-                    time.sleep(0.5)
+                    reset_wifi_interface()
                 except:
                     pass
                 
                 if attempt < max_retries - 1:
                     print("  Retrying after reset...")
-                    time.sleep(2)
+                    time.sleep(3)  # Longer wait before retry
+                else:
+                    stop_led_blink()
+                    raise RuntimeError(f"WiFi connection failed after {max_retries} attempts: {e}")
+            except Exception as e:
+                # Catch any other exceptions
+                print(f"\n  Unexpected error during WiFi connection: {e}")
+                reset_wifi_interface()
+                if attempt < max_retries - 1:
+                    print("  Retrying after reset...")
+                    time.sleep(3)
                 else:
                     stop_led_blink()
                     raise RuntimeError(f"WiFi connection failed after {max_retries} attempts: {e}")
@@ -466,64 +508,50 @@ def scan_wifi_networks():
         return []
 
 def start_ap_mode():
-    """Start Access Point mode for configuration."""
-    # First, disable STA mode to ensure AP mode works properly
-    sta = network.WLAN(network.STA_IF)
-    if sta.active():
-        print("Disabling STA mode...")
-        sta.disconnect()
-        sta.active(False)
-        time.sleep(1)  # Give it time to fully disable
-    
-    # Now start AP mode
-    ap = network.WLAN(network.AP_IF)
-    
-    # Deactivate first to ensure clean start
-    if ap.active():
-        ap.active(False)
-        time.sleep(0.5)
-    
-    # Activate AP mode
-    ap.active(True)
-    time.sleep(1)  # Give it time to activate
-    
-    # Configure AP with explicit settings
+    """Start Access Point mode for configuration. Returns None on failure."""
     try:
-        # Try with channel first (some ESP32 versions support it)
+        # Reset WiFi interface first to recover from errors
+        reset_wifi_interface()
+        time.sleep(2)  # Extra wait after reset
+        
+        # Disable STA mode
+        sta = network.WLAN(network.STA_IF)
+        if sta.active():
+            sta.disconnect()
+            sta.active(False)
+            time.sleep(1)
+        
+        # Start AP mode
+        ap = network.WLAN(network.AP_IF)
+        if ap.active():
+            ap.active(False)
+            time.sleep(1)
+        
+        ap.active(True)
+        time.sleep(2)  # More time for activation
+        
+        # Configure AP
         try:
-            ap.config(essid=AP_SSID, password=AP_PASSWORD, authmode=network.AUTH_WPA2_PSK, channel=6)
-        except TypeError:
-            # If channel parameter not supported, try without it
             ap.config(essid=AP_SSID, password=AP_PASSWORD, authmode=network.AUTH_WPA2_PSK)
+        except:
+            try:
+                ap.config(essid=AP_SSID, password=AP_PASSWORD)
+            except Exception as e:
+                print(f"AP config failed: {e}")
+                return None
+        
+        ap.ifconfig(('192.168.4.1', '255.255.255.0', '192.168.4.1', '8.8.8.8'))
+        time.sleep(2)
+        
+        if ap.active():
+            print(f"AP Mode: {AP_SSID} / {AP_PASSWORD}")
+            stop_led_blink()
+            led_on()
+            return ap
+        return None
     except Exception as e:
-        # If that fails, try minimal config
-        print(f"Warning: AP config with authmode failed: {e}, trying minimal config")
-        try:
-            ap.config(essid=AP_SSID, password=AP_PASSWORD)
-        except Exception as e2:
-            print(f"Error configuring AP: {e2}")
-            raise
-    
-    ap.ifconfig(('192.168.4.1', '255.255.255.0', '192.168.4.1', '8.8.8.8'))
-    
-    # Wait a moment for AP to start broadcasting
-    time.sleep(2)
-    
-    # Verify AP is active
-    if ap.active():
-        ap_config = ap.ifconfig()
-        print(f"\nAP Mode started!")
-        print(f"  SSID: {AP_SSID}")
-        print(f"  Password: {AP_PASSWORD}")
-        print(f"  IP Address: {ap_config[0]}")
-        print(f"  AP Active: {ap.active()}")
-    else:
-        print("Warning: AP mode may not have started properly")
-    
-    # Turn LED on solid to indicate AP mode
-    stop_led_blink()
-    led_on()
-    return ap
+        print(f"AP mode error: {e}")
+        return None
 
 def read_sensor_data(sensor):
     """Read sensor data and return as dictionary."""
@@ -553,6 +581,51 @@ def read_sensor_data(sensor):
             "status": "error",
             "error": str(e)
         }
+
+def read_sensor_safe(sensor):
+    """
+    Read sensor data safely with error tracking.
+    Returns tuple: (success: bool, temp, pres, hum, gas)
+    If 3 consecutive errors occur, restarts the ESP32.
+    """
+    global sensor_error_count
+    
+    try:
+        temp = sensor.temperature
+        pres = sensor.pressure
+        hum = sensor.humidity
+        gas = sensor.gas
+        
+        # Reset error count on successful read
+        if sensor_error_count > 0:
+            print(f"  Sensor read successful, resetting error count (was {sensor_error_count})")
+        sensor_error_count = 0
+        return (True, temp, pres, hum, gas)
+        
+    except Exception as e:
+        sensor_error_count += 1
+        print(f"  Sensor error #{sensor_error_count}: {e}")
+        
+        if sensor_error_count >= MAX_SENSOR_ERRORS:
+            print(f"\n{'='*50}")
+            print(f"SENSOR ERROR: {MAX_SENSOR_ERRORS} consecutive failures")
+            print("Restarting ESP32 to recover...")
+            print(f"{'='*50}")
+            
+            # Blink LED to indicate sensor error restart
+            try:
+                for _ in range(3):  # 3 blinks for sensor error (different from 5 for general error)
+                    led_on()
+                    time.sleep(0.3)
+                    led_off()
+                    time.sleep(0.3)
+            except:
+                pass
+            
+            time.sleep(2)
+            reset()
+        
+        return (False, None, None, None, None)
 
 def send_chunked(cl, data, chunk_size=512):
     """Send data in chunks to avoid memory issues on ESP32."""
@@ -603,364 +676,14 @@ def load_html(is_ap_mode=False):
     try:
         with open('index.html', 'r') as f:
             html = f.read()
-            # Replace placeholder for AP mode check (handle both comment formats)
+            # Replace placeholder for AP mode check
             ap_mode_value = 'true' if is_ap_mode else 'false'
             html = html.replace('const isAPMode = false; // <!--AP_MODE_CHECK-->', f'const isAPMode = {ap_mode_value};')
             return html
     except:
-        # Return default HTML if file doesn't exist
-        return get_default_html(is_ap_mode)
-
-def get_default_html(is_ap_mode=False):
-    """Return default HTML content."""
-    ap_mode_js = 'true' if is_ap_mode else 'false'
-    return """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BME680 Weather Station</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            overflow: hidden;
-        }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-        .header h1 { font-size: 28px; margin-bottom: 10px; }
-        .header p { opacity: 0.9; }
-        .content { padding: 30px; }
-        .sensor-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        .sensor-card {
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            padding: 20px;
-            border-radius: 15px;
-            text-align: center;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        .sensor-card h3 {
-            font-size: 14px;
-            color: #666;
-            margin-bottom: 10px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .sensor-card .value {
-            font-size: 32px;
-            font-weight: bold;
-            color: #333;
-        }
-        .sensor-card .unit {
-            font-size: 14px;
-            color: #666;
-            margin-left: 5px;
-        }
-        .config-section {
-            background: #f8f9fa;
-            padding: 25px;
-            border-radius: 15px;
-            margin-top: 30px;
-        }
-        .config-section h2 {
-            color: #333;
-            margin-bottom: 20px;
-            font-size: 22px;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            color: #555;
-            font-weight: 500;
-        }
-        .form-group input {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        .form-group input:focus,
-        .form-group select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        .form-group select {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-            background-color: white;
-        }
-        .form-group select:disabled {
-            background-color: #f5f5f5;
-            cursor: not-allowed;
-        }
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-        .btn:disabled:hover {
-            transform: none;
-            box-shadow: none;
-        }
-        .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 15px 30px;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            width: 100%;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-        .btn:active {
-            transform: translateY(0);
-        }
-        .status {
-            margin-top: 15px;
-            padding: 12px;
-            border-radius: 8px;
-            text-align: center;
-            font-weight: 500;
-        }
-        .status.success {
-            background: #d4edda;
-            color: #155724;
-        }
-        .status.error {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        .last-update {
-            text-align: center;
-            color: #666;
-            font-size: 14px;
-            margin-top: 20px;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        .updating {
-            animation: pulse 1s infinite;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🌡️ BME680 Weather Station</h1>
-            <p>Real-time Environmental Monitoring</p>
-        </div>
-        <div class="content">
-            <div class="sensor-grid">
-                <div class="sensor-card">
-                    <h3>Temperature</h3>
-                    <div class="value"><span id="temp">--</span><span class="unit">°C</span></div>
-                </div>
-                <div class="sensor-card">
-                    <h3>Humidity</h3>
-                    <div class="value"><span id="hum">--</span><span class="unit">%</span></div>
-                </div>
-                <div class="sensor-card">
-                    <h3>Pressure</h3>
-                    <div class="value"><span id="pres">--</span><span class="unit">hPa</span></div>
-                </div>
-                <div class="sensor-card">
-                    <h3>Air Quality</h3>
-                    <div class="value"><span id="aqi">--</span><span class="unit">AQI</span></div>
-                </div>
-            </div>
-            
-            <div class="config-section">
-                <h2>WiFi Configuration</h2>
-                <form id="wifiForm">
-                    <div class="form-group">
-                        <label for="ssid">WiFi SSID</label>
-                        <select id="ssid" name="ssid" required disabled>
-                            <option value="">Scanning for networks...</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="password">WiFi Password</label>
-                        <input type="password" id="password" name="password" placeholder="Enter WiFi password">
-                    </div>
-                    <button type="submit" class="btn" id="saveBtn" disabled>💾 Save and Reboot</button>
-                </form>
-                <div id="status"></div>
-            </div>
-            
-            <div class="last-update">
-                Last updated: <span id="lastUpdate">--</span>
-            </div>
-        </div>
-    </div>
-    
-    <script>
-        let networksLoaded = false;
-        
-        function loadWiFiNetworks() {
-            const ssidSelect = document.getElementById('ssid');
-            const saveBtn = document.getElementById('saveBtn');
-            
-            console.log('Starting WiFi network scan...');
-            
-            fetch('/api/scan')
-                .then(response => {
-                    console.log('Scan response status:', response.status);
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('Scan data received:', data);
-                    if (data.status === 'ok' && data.networks) {
-                        // Clear existing options
-                        ssidSelect.innerHTML = '<option value="">Select WiFi network...</option>';
-                        
-                        if (data.networks.length === 0) {
-                            ssidSelect.innerHTML = '<option value="">No networks found</option>';
-                            ssidSelect.disabled = false;
-                            saveBtn.disabled = false;
-                            networksLoaded = true;
-                            return;
-                        }
-                        
-                        // Add scanned networks
-                        data.networks.forEach(network => {
-                            const option = document.createElement('option');
-                            option.value = network.ssid;
-                            const signalBars = Math.min(4, Math.floor((network.rssi + 100) / 25));
-                            const signalIcon = '📶'.repeat(signalBars) || '📶';
-                            const lockIcon = network.encrypted ? '🔒' : '';
-                            option.textContent = `${signalIcon} ${network.ssid} ${lockIcon}`;
-                            ssidSelect.appendChild(option);
-                        });
-                        
-                        // Enable form
-                        ssidSelect.disabled = false;
-                        saveBtn.disabled = false;
-                        networksLoaded = true;
-                        console.log('Networks loaded successfully');
-                    } else {
-                        console.error('Invalid scan response:', data);
-                        ssidSelect.innerHTML = '<option value="">Error scanning networks: ' + (data.error || 'Unknown error') + '</option>';
-                        ssidSelect.disabled = false;
-                        saveBtn.disabled = false;
-                        networksLoaded = true; // Allow manual entry if scan fails
-                    }
-                })
-                .catch(error => {
-                    console.error('Error scanning WiFi networks:', error);
-                    ssidSelect.innerHTML = '<option value="">Error: Could not scan networks. Please refresh the page.</option>';
-                    ssidSelect.disabled = false;
-                    saveBtn.disabled = false;
-                    networksLoaded = true; // Allow manual entry if scan fails
-                });
-        }
-        
-        function updateSensorData() {
-            fetch('/api/sensor')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        document.getElementById('temp').textContent = data.temperature;
-                        document.getElementById('hum').textContent = data.humidity;
-                        document.getElementById('pres').textContent = data.pressure;
-                        document.getElementById('aqi').textContent = data.aqi;
-                        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching sensor data:', error);
-                });
-        }
-        
-        document.getElementById('wifiForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            
-            if (!networksLoaded) {
-                document.getElementById('status').innerHTML = '<div class="status error">Please wait for networks to load</div>';
-                return;
-            }
-            
-            const ssid = document.getElementById('ssid').value;
-            const password = document.getElementById('password').value;
-            const statusDiv = document.getElementById('status');
-            
-            if (!ssid) {
-                statusDiv.innerHTML = '<div class="status error">Please select a WiFi network</div>';
-                return;
-            }
-            
-            statusDiv.innerHTML = '<div class="status">Saving configuration...</div>';
-            
-            fetch('/api/config', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ ssid: ssid, password: password })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    statusDiv.innerHTML = '<div class="status success">Configuration saved! Device will reboot in 3 seconds...</div>';
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 3000);
-                } else {
-                    statusDiv.innerHTML = '<div class="status error">Error: ' + (data.error || 'Unknown error') + '</div>';
-                }
-            })
-            .catch(error => {
-                statusDiv.innerHTML = '<div class="status error">Error: ' + error.message + '</div>';
-            });
-        });
-        
-        // Load WiFi networks on page load
-        loadWiFiNetworks();
-        
-        // Update sensor data every 10 seconds
-        updateSensorData();
-        setInterval(updateSensorData, 10000);
-    </script>
-</body>
-</html>"""
+        # Return minimal HTML if file doesn't exist
+        ap_mode_js = 'true' if is_ap_mode else 'false'
+        return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BME680</title><style>body{{font-family:Arial;margin:20px;background:#f0f0f0}}h1{{color:#333}}.card{{background:#fff;padding:15px;margin:10px 0;border-radius:5px}}.btn{{background:#4CAF50;color:#fff;border:none;padding:10px 20px;border-radius:5px;cursor:pointer;width:100%}}input,select{{width:100%;padding:8px;margin:5px 0;border:1px solid #ddd;border-radius:3px}}</style></head><body><h1>BME680 Weather</h1><div class="card"><div>Temp: <span id="temp">--</span>°C</div><div>Humidity: <span id="hum">--</span>%</div><div>Pressure: <span id="pres">--</span>hPa</div><div>AQI: <span id="aqi">--</span></div></div><div class="card"><h2>WiFi Config</h2><form id="wifiForm"><label>SSID:</label><select id="ssid" disabled><option>Scanning...</option></select><label>Password:</label><input type="password" id="password"><button type="submit" class="btn" id="saveBtn" disabled>Save</button></form><div id="status"></div></div><script>const isAPMode={ap_mode_js};let n=false;function l(){{const s=document.getElementById('ssid'),b=document.getElementById('saveBtn');fetch('/api/scan').then(r=>r.json()).then(d=>{{if(d.status==='ok'&&d.networks){{s.innerHTML='<option value="">Select...</option>';d.networks.forEach(n=>{{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+(n.encrypted?' [Locked]':'');s.appendChild(o)}});s.disabled=false;b.disabled=false;n=true}}}}).catch(e=>{{s.innerHTML='<option>Error</option>';s.disabled=false;b.disabled=false;n=true}});}}function u(){{fetch('/api/sensor').then(r=>r.json()).then(d=>{{if(d.status==='ok'){{document.getElementById('temp').textContent=d.temperature;document.getElementById('hum').textContent=d.humidity;document.getElementById('pres').textContent=d.pressure;document.getElementById('aqi').textContent=d.aqi;}}}});}}document.getElementById('wifiForm').addEventListener('submit',function(e){{e.preventDefault();if(!n)return;const s=document.getElementById('ssid').value,p=document.getElementById('password').value;if(!s){{document.getElementById('status').innerHTML='Select network';return;}}document.getElementById('status').innerHTML='Saving...';fetch('/api/config',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{ssid:s,password:p}})}}).then(r=>r.json()).then(d=>{{if(d.success){{document.getElementById('status').innerHTML='Saved! Rebooting...';setTimeout(()=>location.reload(),2000);}}else{{document.getElementById('status').innerHTML='Error: '+d.error;}}}}).catch(e=>{{document.getElementById('status').innerHTML='Error: '+e.message;}});}});if(isAPMode)l();u();setInterval(u,10000);</script></body></html>"""
 
 def web_server_thread(sensor, wifi_config, is_ap_mode=False):
     """Web server thread to handle HTTP requests."""
@@ -1080,7 +803,7 @@ def web_server_thread(sensor, wifi_config, is_ap_mode=False):
                         # If file sending failed, use default HTML
                         if not file_sent:
                             print("Using default HTML...")
-                            html = get_default_html(is_ap_mode)
+                            html = load_html(is_ap_mode)
                             bytes_sent = send_chunked(cl, html, chunk_size=512)
                             print(f"Default HTML sent: {bytes_sent} bytes")
                             
@@ -1283,24 +1006,45 @@ def main():
     
     if wifi_config.get('ssid') and wifi_config.get('password'):
         print("\nAttempting to connect to WiFi...")
-        wifi = connect_wifi(wifi_config['ssid'], wifi_config['password'])
-        wifi_connected = True
-        print("WiFi connected successfully!")
-        # Start web server AFTER WiFi is connected
-        print("\nStarting web server...")
-        _thread.start_new_thread(web_server_thread, (sensor, wifi_config, False))
-        print("Web server thread started")
+        try:
+            # Use 3 retries during initialization for better reliability
+            wifi = connect_wifi(wifi_config['ssid'], wifi_config['password'], max_retries=3)
+            wifi_connected = True
+            print("WiFi connected successfully!")
+            # Start web server AFTER WiFi is connected
+            print("\nStarting web server...")
+            _thread.start_new_thread(web_server_thread, (sensor, wifi_config, False))
+            print("Web server thread started")
+        except Exception as e:
+            print(f"\n{'='*50}")
+            print("WiFi connection failed during initialization")
+            print(f"Error: {e}")
+            print(f"{'='*50}")
+            print("Falling back to AP mode for configuration...")
+            print(f"{'='*50}\n")
+            # Fall back to AP mode instead of crashing
+            ap = start_ap_mode()
+            if ap:
+                ap_mode_active = True
+                print("\nStarting web server...")
+                _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
+                time.sleep(2)
+            else:
+                print("AP mode failed. Rebooting in 5s...")
+                time.sleep(5)
+                reset()
     else:
         print("\nNo WiFi credentials found, starting AP mode...")
-        start_ap_mode()
-        ap_mode_active = True
-        # Start web server in AP mode
-        print("\nStarting web server...")
-        _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
-        print("Web server thread started")
-        # Give the web server thread time to bind and start listening
-        time.sleep(2)
-        print("Web server should be ready now. Connect to http://192.168.4.1")
+        ap = start_ap_mode()
+        if ap:
+            ap_mode_active = True
+            print("\nStarting web server...")
+            _thread.start_new_thread(web_server_thread, (sensor, wifi_config, True))
+            time.sleep(2)
+        else:
+            print("AP mode failed. Rebooting in 5s...")
+            time.sleep(5)
+            reset()
     
     # If in AP mode, wait for 5 minutes before rebooting
     if ap_mode_active and not wifi_connected:
@@ -1361,10 +1105,22 @@ def main():
                 print("\nNo WiFi connection available, skipping data transmission")
                 print("Web server is still accessible for configuration")
                 # Still read sensor for web interface
-                temp = sensor.temperature
-                pres = sensor.pressure
-                hum = sensor.humidity
-                gas = sensor.gas
+                print("Reading sensor...")
+                success, temp, pres, hum, gas = read_sensor_safe(sensor)
+                if not success:
+                    print("  Sensor read failed, will retry next cycle")
+                    # Continue to sleep/wait even if sensor read failed
+                    if ON_BATTERY:
+                        actual_sleep_ms = int((DATA_INTERVAL - (time.time() - cycle_start_time)) * 1000)
+                        if actual_sleep_ms < 1000:
+                            actual_sleep_ms = 1000
+                        print(f"\nEntering deep sleep for {actual_sleep_ms/1000:.1f} seconds...")
+                        deepsleep(actual_sleep_ms)
+                    else:
+                        print(f"\nWaiting {DATA_INTERVAL} seconds until next reading...")
+                        time.sleep(DATA_INTERVAL)
+                    continue
+                
                 aqi = calculate_aqi(gas)
                 print(f"  Temperature: {temp}°C")
                 print(f"  Pressure: {pres}hPa")
@@ -1386,10 +1142,21 @@ def main():
             
             # Read sensor data
             print("Reading sensor...")
-            temp = sensor.temperature
-            pres = sensor.pressure
-            hum = sensor.humidity
-            gas = sensor.gas
+            success, temp, pres, hum, gas = read_sensor_safe(sensor)
+            if not success:
+                print("  Sensor read failed, will retry next cycle")
+                # Continue to sleep/wait even if sensor read failed
+                # (read_sensor_safe will restart ESP32 after 3 consecutive errors)
+                if ON_BATTERY:
+                    actual_sleep_ms = int((DATA_INTERVAL - (time.time() - cycle_start_time)) * 1000)
+                    if actual_sleep_ms < 1000:
+                        actual_sleep_ms = 1000
+                    print(f"\nEntering deep sleep for {actual_sleep_ms/1000:.1f} seconds...")
+                    deepsleep(actual_sleep_ms)
+                else:
+                    print(f"\nWaiting {DATA_INTERVAL} seconds until next reading...")
+                    time.sleep(DATA_INTERVAL)
+                continue
             
             print(f"  Temperature: {temp}°C")
             print(f"  Pressure: {pres}hPa")
