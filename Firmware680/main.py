@@ -31,6 +31,9 @@ SENSOR_POWER_PIN = 4  # Change to None to disable, or use GPIO 4, 5, 18, 19, etc
 # LED Configuration (ESP32-WROOM typically uses GPIO 2)
 LED_PIN = 2  # Change if your board uses a different pin
 
+# Temperature offset (loaded from wifi.json, default: 0.0)
+TEMPERATURE_OFFSET = 0.0
+
 # Backend server configuration (can be overridden in wifi.json)
 BACKEND_URL = None  # Will be loaded from wifi.json
 BACKEND_TIMEOUT = 10  # seconds
@@ -174,7 +177,8 @@ def load_wifi_config():
                     'backend_url': config.get('backend_url', 'http://192.168.1.100:8811/temprec'),
                     'port': config.get('port', 8811),
                     'data_interval': config.get('data_interval', 300),
-                    'onBattery': config.get('onBattery', False)
+                    'onBattery': config.get('onBattery', False),
+                    'temperature_offset': config.get('temperature_offset', 0.0)
                 }
             if 'backend_url' not in config:
                 raise ValueError("wifi.json must contain 'backend_url' field. Example: 'http://your-server-ip:8811/temprec'")
@@ -236,6 +240,16 @@ def load_wifi_config():
                 # Default to False if not specified (keep running with delay)
                 config['onBattery'] = False
                 print("Warning: onBattery not specified in wifi.json, using default: false (keep running with delay)")
+            
+            # Load temperature offset if provided
+            if 'temperature_offset' in config:
+                temp_offset = config['temperature_offset']
+                if not isinstance(temp_offset, (int, float)):
+                    raise ValueError("temperature_offset must be a number")
+                config['temperature_offset'] = float(temp_offset)
+            else:
+                # Default to 0.0 if not specified
+                config['temperature_offset'] = 0.0
             
             return config
     except Exception as e:
@@ -585,7 +599,7 @@ def start_ap_mode():
 def read_sensor_data(sensor):
     """Read sensor data and return as dictionary."""
     try:
-        temp = sensor.temperature
+        temp = sensor.temperature + TEMPERATURE_OFFSET
         pres = sensor.pressure
         hum = sensor.humidity
         gas = sensor.gas
@@ -621,7 +635,7 @@ def read_sensor_safe(sensor):
     
     while True:  # Retry indefinitely
         try:
-            temp = sensor.temperature
+            temp = sensor.temperature + TEMPERATURE_OFFSET
             pres = sensor.pressure
             hum = sensor.humidity
             gas = sensor.gas
@@ -989,7 +1003,7 @@ def main():
     wifi_config = load_wifi_config()
     
     # Get backend URL and port from config
-    global BACKEND_URL, DATA_INTERVAL, ON_BATTERY
+    global BACKEND_URL, DATA_INTERVAL, ON_BATTERY, TEMPERATURE_OFFSET
     BACKEND_URL = wifi_config.get('backend_url')
     if not BACKEND_URL:
         # Set a default backend URL if not specified (will be updated when WiFi is configured)
@@ -1009,6 +1023,13 @@ def main():
         print("Power mode: Battery (will use deep sleep)")
     else:
         print("Power mode: AC Power (will keep running with delay)")
+    
+    # Get temperature offset from config
+    TEMPERATURE_OFFSET = wifi_config.get('temperature_offset', 0.0)
+    if TEMPERATURE_OFFSET != 0.0:
+        print(f"Temperature offset: {TEMPERATURE_OFFSET}°C")
+    else:
+        print("Temperature offset: 0.0°C (no adjustment)")
     
     # Initialize LED
     print("\nInitializing LED...")
@@ -1192,7 +1213,7 @@ def main():
                 pass
             
             # Verify WiFi is still connected - if not, log warning
-            wifi = network.WLAN(network.STA_IF)
+                wifi = network.WLAN(network.STA_IF)
             if not wifi.isconnected():
                 print("Warning: WiFi disconnected after sending data, will reconnect on next cycle")
             

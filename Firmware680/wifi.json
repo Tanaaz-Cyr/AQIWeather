@@ -4,5 +4,6 @@
   "backend_url": "http://{your-server-ip}:{port}/temprec",
   "port": 8080,
   "data_interval": 300,
-  "onBattery": false
+  "onBattery": false,
+  "temperature_offset": 0
 }
