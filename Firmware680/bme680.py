@@ -273,7 +273,11 @@ class Adafruit_BME680:
         ctrl = (ctrl & 0xFC) | 0x01  # enable single shot!
         self._write(_BME680_REG_CTRL_MEAS, [ctrl])
         new_data = False
+        timeout_start = time.ticks_ms()
+        timeout_ms = 5000  # 5 second timeout
         while not new_data:
+            if time.ticks_diff(time.ticks_ms(), timeout_start) > timeout_ms:
+                raise RuntimeError("BME680 sensor timeout - sensor not responding")
             data = self._read(_BME680_REG_MEAS_STATUS, 15)
             new_data = data[0] & 0x80 != 0
             time.sleep(0.005)
@@ -341,19 +345,25 @@ class BME680_I2C(Adafruit_BME680):
 
     def _read(self, register, length):
         """Returns an array of 'length' bytes from the 'register'"""
-        result = bytearray(length)
-        self._i2c.readfrom_mem_into(self._address, register & 0xff, result)
-        if self._debug:
-            print("\t${:x} read ".format(register), " ".join(["{:02x}".format(i) for i in result]))
-        return result
+        try:
+            result = bytearray(length)
+            self._i2c.readfrom_mem_into(self._address, register & 0xff, result)
+            if self._debug:
+                print("\t${:x} read ".format(register), " ".join(["{:02x}".format(i) for i in result]))
+            return result
+        except OSError as e:
+            raise RuntimeError(f"BME680 I2C read error at register 0x{register:02x}: {e}")
 
     def _write(self, register, values):
         """Writes an array of 'length' bytes to the 'register'"""
-        if self._debug:
-            print("\t${:x} write".format(register), " ".join(["{:02x}".format(i) for i in values]))
-        for value in values:
-            self._i2c.writeto_mem(self._address, register, bytearray([value & 0xFF]))
-            register += 1
+        try:
+            if self._debug:
+                print("\t${:x} write".format(register), " ".join(["{:02x}".format(i) for i in values]))
+            for value in values:
+                self._i2c.writeto_mem(self._address, register, bytearray([value & 0xFF]))
+                register += 1
+        except OSError as e:
+            raise RuntimeError(f"BME680 I2C write error at register 0x{register:02x}: {e}")
 
 
 class BME680_SPI(Adafruit_BME680):

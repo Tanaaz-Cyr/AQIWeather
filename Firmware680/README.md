@@ -8,7 +8,7 @@ Improved firmware for BME680 sensor with enhanced stability and error handling.
 
 | BME680 Pin | ESP32 Pin | Description |
 |------------|-----------|-------------|
-| VCC        | 3.3V      | Power (3.3V only!) |
+| VCC        | **GPIO 4** or 3.3V | Power (see Power Control section) |
 | GND        | GND       | Ground |
 | SCL        | **GPIO 22** | I2C Clock |
 | SDA        | **GPIO 21** | I2C Data |
@@ -20,15 +20,36 @@ Improved firmware for BME680 sensor with enhanced stability and error handling.
 - They are the most stable and recommended I2C pins
 - Compatible with all ESP32 variants
 
+### Sensor Power Control (Recommended)
+
+**GPIO 4** is used for sensor power control to enable hardware reset when the sensor gets stuck. This is **highly recommended** for BME680 reliability.
+
+**Option 1: Direct GPIO Power (Simplest)**
+- Connect BME680 VCC directly to **GPIO 4**
+- BME680 draws ~3.7mA, well within ESP32's 12mA recommended limit
+- No additional components needed
+
+**Option 2: MOSFET Switch (More Reliable)**
+- Use a small N-channel MOSFET (e.g., 2N7000 or IRLZ44N)
+- ESP32 GPIO 4 → MOSFET Gate
+- ESP32 3.3V → MOSFET Drain → BME680 VCC
+- ESP32 GND → MOSFET Source → BME680 GND
+
+**To disable power control** (sensor always powered), set in `main.py`:
+```python
+SENSOR_POWER_PIN = None  # Disable power control
+```
+
 ### Alternative Pins (if needed)
 
 If GPIO 21/22 are not available, you can modify `main.py`:
 ```python
 I2C_SCL_PIN = 19  # Alternative SCL pin
 I2C_SDA_PIN = 18  # Alternative SDA pin
+SENSOR_POWER_PIN = 5  # Alternative power control pin (must support 40mA)
 ```
 
-**Note:** If using alternative pins, ensure they support I2C functionality.
+**Note:** If using alternative pins, ensure they support I2C functionality. For power control, use pins that can source at least 12mA (GPIO 1, 2, 4, 5, 18, 19, 21, 22, 23).
 
 ## Setup Instructions
 
@@ -37,7 +58,7 @@ I2C_SDA_PIN = 18  # Alternative SDA pin
    - `main.py` - Main firmware
    - `wifi.json` - WiFi credentials
 
-2. **Configure WiFi, Backend, Port, and Data Interval:**
+2. **Configure WiFi, Backend, Port, Data Interval, and Power Mode:**
    Edit `wifi.json`:
    ```json
    {
@@ -45,22 +66,26 @@ I2C_SDA_PIN = 18  # Alternative SDA pin
      "password": "YourPassword",
      "backend_url": "http://your-server-ip:8811/temprec",
      "port": 8811,
-     "data_interval": 300
+     "data_interval": 300,
+     "onBattery": false
    }
    ```
    
    **Important:** Replace the placeholder values with your actual:
-   - WiFi network name (SSID)
-   - WiFi password
-   - Backend server URL (where you want to send sensor data)
-   - Port: Server port number (default: 8811)
+   - **ssid**: WiFi network name
+   - **password**: WiFi password
+   - **backend_url**: Backend server URL (where you want to send sensor data)
+   - **port**: Server port number (default: 8811)
      - The port in `backend_url` will be overridden by this value if specified
      - Must be between 1 and 65535
-   - Data interval: Time in seconds between readings (minimum: 60 seconds)
+   - **data_interval**: Time in seconds between readings (minimum: 60 seconds)
      - `300` = 5 minutes (default)
      - `600` = 10 minutes
      - `1800` = 30 minutes
      - `3600` = 1 hour
+   - **onBattery**: Power mode setting
+     - `true` = Battery mode (uses deep sleep between readings)
+     - `false` = AC power mode (keeps device awake, uses delay between readings)
 
 4. **Run:**
    The firmware will start automatically on boot if `main.py` is the main file.
@@ -68,14 +93,16 @@ I2C_SDA_PIN = 18  # Alternative SDA pin
 ## Features
 
 - ✅ **Power-efficient** - Deep sleep mode for battery operation (~10µA in sleep)
-- ✅ **Battery optimized** - WiFi disconnected after data transmission
-- ✅ **Robust error handling** - Retries for sensor reads and HTTP requests
+- ✅ **Battery optimized** - Configurable deep sleep or continuous operation
+- ✅ **Hardware sensor reset** - GPIO-controlled power cycling for stuck sensors
+- ✅ **Aggressive error recovery** - Any error triggers immediate recovery or reboot
+- ✅ **Sensor timeout protection** - Prevents infinite hangs on I2C communication failures
 - ✅ **WiFi reconnection** - Automatically reconnects if WiFi drops
-- ✅ **Data validation** - Checks sensor readings are within valid ranges
-- ✅ **Memory management** - Garbage collection to prevent memory issues
+- ✅ **Memory optimized** - Reduced code size and efficient memory usage
 - ✅ **Detailed logging** - Clear status messages for debugging
 - ✅ **Gas resistance** - BME680 includes gas sensor (air quality)
-- ✅ **Auto-reset** - Resets device if critical errors occur
+- ✅ **Auto-reboot on errors** - Prevents device from getting stuck in bad states
+- ✅ **AP mode fallback** - Falls back to AP mode if WiFi connection fails
 
 ## Power Management & Battery Operation
 
@@ -182,21 +209,49 @@ All user-configurable settings are in `wifi.json`:
 For advanced users, these can be modified in `main.py`:
 
 ```python
-# Power management
-USE_DEEP_SLEEP = True  # Enable deep sleep for battery operation
-DISCONNECT_WIFI_AFTER_SEND = True  # Disconnect WiFi after sending data
+# I2C Configuration
+I2C_SCL_PIN = 22  # I2C Clock pin
+I2C_SDA_PIN = 21  # I2C Data pin
+I2C_FREQ = 100000  # I2C frequency (100kHz)
+BME680_ADDRESS = 0x76  # Sensor I2C address (0x76 or 0x77)
+
+# Sensor Power Control
+SENSOR_POWER_PIN = 4  # GPIO pin for sensor power control (None to disable)
+
+# LED Configuration
+LED_PIN = 2  # GPIO pin for status LED
 
 # Timeouts
-BACKEND_TIMEOUT = 10  # HTTP timeout
-WIFI_CONNECT_TIMEOUT = 30  # WiFi connection timeout
+BACKEND_TIMEOUT = 10  # HTTP timeout (seconds)
+WIFI_TIMEOUT = 30  # WiFi connection timeout (seconds)
 ```
+
+**Note**: Most settings are now in `wifi.json` for easier configuration. Only modify `main.py` if you need to change hardware pin assignments.
 
 ## Troubleshooting
 
 ### Sensor Not Detected
-- Check I2C connections (especially power to 3.3V)
+- Check I2C connections (especially power)
 - Verify pins are GPIO 21 (SDA) and GPIO 22 (SCL)
-- Check I2C address (should be 0x76 or 0x77)
+- Check I2C address (should be 0x76 or 0x77, default is 0x76)
+- If using power control: Verify GPIO 4 is connected to sensor VCC
+- Check that sensor power control is initialized (see serial output)
+
+### Sensor Errors / Device Stops Working
+- **Symptom**: Device stops sending data after a few hours
+- **Solution**: Enable GPIO power control (connect sensor VCC to GPIO 4)
+- The firmware will automatically power cycle the sensor on errors
+- If power cycling doesn't help, device will reboot to recover
+- Check serial output for specific error messages
+
+### Sensor Timeout Errors
+- **Symptom**: "BME680 sensor timeout - sensor not responding"
+- **Causes**: I2C bus lockup, sensor stuck, loose connections
+- **Solution**: 
+  - Enable GPIO power control for automatic recovery
+  - Check I2C wiring (SDA/SCL connections)
+  - Verify power supply is stable
+  - Check for I2C bus conflicts with other devices
 
 ### WiFi Connection Issues
 - Verify SSID and password in `wifi.json`
@@ -224,16 +279,87 @@ The firmware sends this JSON to the backend:
   "temperature": 23.45,
   "humidity": 56.78,
   "pressure": 1013.25,
-  "gas_resistance": 123456
+  "gas_resistance": 123456,
+  "aqi": 45
 }
 ```
+
+- **temperature**: Temperature in Celsius (°C)
+- **humidity**: Relative humidity percentage (%)
+- **pressure**: Atmospheric pressure in hectopascals (hPa)
+- **gas_resistance**: Gas sensor resistance in ohms (Ω)
+- **aqi**: Air Quality Index (calculated from gas resistance, 0-500)
+
+## Known Issues & Solutions
+
+### BME680 Sensor Stuck After Hours
+
+**Problem**: Sensor stops responding after running for several hours, device stops sending data.
+
+**Root Cause**: BME680 can get stuck in a bad state that persists through soft resets.
+
+**Solution**: 
+1. **Enable GPIO Power Control** (Recommended):
+   - Connect BME680 VCC to GPIO 4 (or another GPIO pin)
+   - Set `SENSOR_POWER_PIN = 4` in `main.py`
+   - Firmware will automatically power cycle sensor on errors
+
+2. **Hardware Reset**:
+   - If GPIO power control not available, physically disconnect/reconnect sensor power
+   - Or use a hardware reset circuit
+
+**Why This Works**: Hardware power cycle completely resets the sensor's internal state, clearing any stuck conditions that soft resets can't fix.
+
+## Error Handling & Recovery
+
+### Sensor Error Recovery
+
+The firmware includes multiple layers of error protection:
+
+1. **I2C Timeout Protection**: 
+   - BME680 library has 1-second timeout on sensor reads
+   - Prevents infinite hangs if sensor stops responding
+
+2. **Hardware Power Cycling**:
+   - On sensor error, GPIO power control turns sensor off/on
+   - Gives sensor a complete hardware reset
+   - Attempts to read again before rebooting
+
+3. **Automatic Reboot**:
+   - If sensor error persists after power cycle, ESP32 reboots
+   - Prevents device from getting stuck in bad state
+   - Ensures fresh start on next boot
+
+### Error Behavior
+
+- **Sensor Error**: 
+  - First: Attempt power cycle (if GPIO power control enabled)
+  - If power cycle succeeds: Continue operation
+  - If power cycle fails: Reboot ESP32 (3 LED blinks)
+
+- **WiFi Error**: 
+  - Falls back to AP mode for configuration
+  - Allows WiFi reconfiguration via web interface
+
+- **Any Other Error**: 
+  - Immediate reboot (5 LED blinks)
+  - Prevents device from hanging indefinitely
+
+### LED Blink Codes
+
+- **3 blinks**: Sensor error - power cycling or rebooting
+- **5 blinks**: General error - rebooting ESP32
+- **Continuous blink**: WiFi connection attempt
+- **Solid ON**: AP mode active
 
 ## Differences from BME280 Firmware
 
 1. **Gas Resistance** - BME680 includes air quality sensor
-2. **Better Error Handling** - More robust retry logic
-3. **WiFi Reconnection** - Automatic reconnection on disconnect
-4. **Data Validation** - Checks sensor readings are valid
-5. **Memory Management** - Garbage collection to prevent crashes
-6. **Better Logging** - More detailed status messages
+2. **Hardware Power Control** - GPIO-controlled sensor reset capability
+3. **Timeout Protection** - Prevents infinite hangs on I2C failures
+4. **Aggressive Error Recovery** - Power cycles sensor before rebooting
+5. **Memory Optimized** - Reduced code size for better reliability
+6. **Better Error Handling** - Multiple recovery mechanisms
+7. **AP Mode Fallback** - Automatic fallback if WiFi fails
+8. **Configurable Power Mode** - Battery (deep sleep) or AC (continuous) operation
 

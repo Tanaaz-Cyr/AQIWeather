@@ -23,6 +23,11 @@ I2C_SDA_PIN = 21
 I2C_FREQ = 100000
 BME680_ADDRESS = 0x76  # Change to 0x77 if your sensor uses that address
 
+# Sensor Power Control (GPIO to power cycle BME680)
+# BME680 draws ~3.7mA, well within ESP32 GPIO 12mA recommended limit
+# Set to None to disable power cycling (sensor always powered)
+SENSOR_POWER_PIN = 4  # Change to None to disable, or use GPIO 4, 5, 18, 19, etc. (pins that can source 40mA)
+
 # LED Configuration (ESP32-WROOM typically uses GPIO 2)
 LED_PIN = 2  # Change if your board uses a different pin
 
@@ -55,9 +60,43 @@ WEB_SERVER_PORT = 80
 led = None
 led_blink_thread_running = False
 
-# Sensor error tracking
-sensor_error_count = 0
-MAX_SENSOR_ERRORS = 3
+# Sensor power control
+sensor_power = None
+
+def init_sensor_power():
+    """Initialize sensor power control GPIO."""
+    global sensor_power
+    if SENSOR_POWER_PIN is not None:
+        try:
+            sensor_power = Pin(SENSOR_POWER_PIN, Pin.OUT)
+            sensor_power.on()  # Turn sensor on by default
+            print(f"Sensor power control initialized on GPIO {SENSOR_POWER_PIN}")
+        except Exception as e:
+            print(f"Warning: Could not initialize sensor power control: {e}")
+            sensor_power = None
+
+def power_cycle_sensor(duration_off=5.0):
+    """Power cycle the BME680 sensor by turning it off and on.
+    
+    Args:
+        duration_off: Time in seconds to keep sensor off (default: 5 seconds)
+    """
+    global sensor_power
+    if sensor_power is None:
+        return False
+    try:
+        print(f"Power cycling BME680 sensor (off for {duration_off}s)...")
+        sensor_power.off()  # Turn sensor off
+        time.sleep(duration_off)  # Wait for power to fully drain
+        sensor_power.on()  # Turn sensor back on
+        time.sleep(0.5)  # Wait 500ms for sensor to initialize
+        print("Sensor power cycle complete")
+        return True
+    except Exception as e:
+        print(f"Error power cycling sensor: {e}")
+        return False
+
+# Sensor error tracking (removed - any error causes immediate reboot)
 
 def init_led():
     """Initialize LED pin."""
@@ -510,27 +549,19 @@ def scan_wifi_networks():
 def start_ap_mode():
     """Start Access Point mode for configuration. Returns None on failure."""
     try:
-        # Reset WiFi interface first to recover from errors
         reset_wifi_interface()
-        time.sleep(2)  # Extra wait after reset
-        
-        # Disable STA mode
+        time.sleep(2)
         sta = network.WLAN(network.STA_IF)
         if sta.active():
             sta.disconnect()
             sta.active(False)
             time.sleep(1)
-        
-        # Start AP mode
         ap = network.WLAN(network.AP_IF)
         if ap.active():
             ap.active(False)
             time.sleep(1)
-        
         ap.active(True)
-        time.sleep(2)  # More time for activation
-        
-        # Configure AP
+        time.sleep(2)
         try:
             ap.config(essid=AP_SSID, password=AP_PASSWORD, authmode=network.AUTH_WPA2_PSK)
         except:
@@ -539,10 +570,8 @@ def start_ap_mode():
             except Exception as e:
                 print(f"AP config failed: {e}")
                 return None
-        
         ap.ifconfig(('192.168.4.1', '255.255.255.0', '192.168.4.1', '8.8.8.8'))
         time.sleep(2)
-        
         if ap.active():
             print(f"AP Mode: {AP_SSID} / {AP_PASSWORD}")
             stop_led_blink()
@@ -584,48 +613,46 @@ def read_sensor_data(sensor):
 
 def read_sensor_safe(sensor):
     """
-    Read sensor data safely with error tracking.
-    Returns tuple: (success: bool, temp, pres, hum, gas)
-    If 3 consecutive errors occur, restarts the ESP32.
+    Read sensor data safely. ANY error triggers fast LED blink, power cycle (5s off), then retry.
+    Returns tuple: (temp, pres, hum, gas)
+    Will retry indefinitely until sensor responds.
     """
-    global sensor_error_count
+    retry_count = 0
     
-    try:
-        temp = sensor.temperature
-        pres = sensor.pressure
-        hum = sensor.humidity
-        gas = sensor.gas
-        
-        # Reset error count on successful read
-        if sensor_error_count > 0:
-            print(f"  Sensor read successful, resetting error count (was {sensor_error_count})")
-        sensor_error_count = 0
-        return (True, temp, pres, hum, gas)
-        
-    except Exception as e:
-        sensor_error_count += 1
-        print(f"  Sensor error #{sensor_error_count}: {e}")
-        
-        if sensor_error_count >= MAX_SENSOR_ERRORS:
+    while True:  # Retry indefinitely
+        try:
+            temp = sensor.temperature
+            pres = sensor.pressure
+            hum = sensor.humidity
+            gas = sensor.gas
+            return (temp, pres, hum, gas)
+        except Exception as e:
+            retry_count += 1
             print(f"\n{'='*50}")
-            print(f"SENSOR ERROR: {MAX_SENSOR_ERRORS} consecutive failures")
-            print("Restarting ESP32 to recover...")
+            print(f"SENSOR ERROR (attempt {retry_count})")
+            print(f"{'='*50}")
+            print(f"Error: {e}")
             print(f"{'='*50}")
             
-            # Blink LED to indicate sensor error restart
+            # Fast LED blinking to indicate sensor error (0.5s on/off for 5 seconds)
+            print("Flashing LED rapidly (0.5s on/off)...")
             try:
-                for _ in range(3):  # 3 blinks for sensor error (different from 5 for general error)
+                for _ in range(10):  # Flash 10 times (5 seconds total: 0.5s on + 0.5s off each)
                     led_on()
-                    time.sleep(0.3)
+                    time.sleep(0.5)
                     led_off()
-                    time.sleep(0.3)
+                    time.sleep(0.5)
             except:
                 pass
             
-            time.sleep(2)
-            reset()
-        
-        return (False, None, None, None, None)
+            # Power cycle sensor (off for 5 seconds)
+            if power_cycle_sensor(duration_off=5.0):
+                print("Retrying sensor read after power cycle...")
+                # Will loop back and try reading again
+            else:
+                print("Power control not available, waiting 5 seconds before retry...")
+                time.sleep(5.0)
+                # Will loop back and try reading again
 
 def send_chunked(cl, data, chunk_size=512):
     """Send data in chunks to avoid memory issues on ESP32."""
@@ -987,6 +1014,10 @@ def main():
     print("\nInitializing LED...")
     init_led()
     
+    # Initialize sensor power control
+    print("\nInitializing sensor power control...")
+    init_sensor_power()
+    
     # Initialize I2C
     print(f"\nInitializing I2C (SCL=GPIO{I2C_SCL_PIN}, SDA=GPIO{I2C_SDA_PIN})...")
     i2c = I2C(0, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=I2C_FREQ)
@@ -1106,21 +1137,7 @@ def main():
                 print("Web server is still accessible for configuration")
                 # Still read sensor for web interface
                 print("Reading sensor...")
-                success, temp, pres, hum, gas = read_sensor_safe(sensor)
-                if not success:
-                    print("  Sensor read failed, will retry next cycle")
-                    # Continue to sleep/wait even if sensor read failed
-                    if ON_BATTERY:
-                        actual_sleep_ms = int((DATA_INTERVAL - (time.time() - cycle_start_time)) * 1000)
-                        if actual_sleep_ms < 1000:
-                            actual_sleep_ms = 1000
-                        print(f"\nEntering deep sleep for {actual_sleep_ms/1000:.1f} seconds...")
-                        deepsleep(actual_sleep_ms)
-                    else:
-                        print(f"\nWaiting {DATA_INTERVAL} seconds until next reading...")
-                        time.sleep(DATA_INTERVAL)
-                    continue
-                
+                temp, pres, hum, gas = read_sensor_safe(sensor)
                 aqi = calculate_aqi(gas)
                 print(f"  Temperature: {temp}°C")
                 print(f"  Pressure: {pres}hPa")
@@ -1142,22 +1159,7 @@ def main():
             
             # Read sensor data
             print("Reading sensor...")
-            success, temp, pres, hum, gas = read_sensor_safe(sensor)
-            if not success:
-                print("  Sensor read failed, will retry next cycle")
-                # Continue to sleep/wait even if sensor read failed
-                # (read_sensor_safe will restart ESP32 after 3 consecutive errors)
-                if ON_BATTERY:
-                    actual_sleep_ms = int((DATA_INTERVAL - (time.time() - cycle_start_time)) * 1000)
-                    if actual_sleep_ms < 1000:
-                        actual_sleep_ms = 1000
-                    print(f"\nEntering deep sleep for {actual_sleep_ms/1000:.1f} seconds...")
-                    deepsleep(actual_sleep_ms)
-                else:
-                    print(f"\nWaiting {DATA_INTERVAL} seconds until next reading...")
-                    time.sleep(DATA_INTERVAL)
-                continue
-            
+            temp, pres, hum, gas = read_sensor_safe(sensor)
             print(f"  Temperature: {temp}°C")
             print(f"  Pressure: {pres}hPa")
             print(f"  Humidity: {hum}%")
@@ -1177,44 +1179,35 @@ def main():
             }
             
             # Send to server (with WiFi connection check)
+            # Any error in send_data will raise exception and trigger reboot
             print("\nSending data to server...")
-            send_success = send_data(BACKEND_URL, data, wifi, wifi_config['ssid'], wifi_config['password'])
-            if send_success:
-                print("✓ Success!")
-                # Quick LED blink to indicate success
-                try:
-                    led_on()
-                    time.sleep(0.1)
-                    led_off()
-                except:
-                    pass
-            else:
-                # This shouldn't happen as send_data now raises on error, but just in case
-                raise RuntimeError("Failed to send data to server")
+            send_data(BACKEND_URL, data, wifi, wifi_config['ssid'], wifi_config['password'])
+            print("✓ Success!")
+            # Quick LED blink to indicate success
+            try:
+                led_on()
+                time.sleep(0.1)
+                led_off()
+            except:
+                pass
             
-            # Only disconnect WiFi if explicitly configured to save power (not recommended)
-            if DISCONNECT_WIFI_AFTER_SEND:
-                disconnect_wifi()
-            else:
-                # Verify WiFi is still connected
-                wifi = network.WLAN(network.STA_IF)
-                if wifi.isconnected():
-                    print("WiFi remains connected for next cycle")
-                else:
-                    print("Warning: WiFi disconnected, will reconnect on next cycle")
+            # Verify WiFi is still connected - if not, log warning
+            wifi = network.WLAN(network.STA_IF)
+            if not wifi.isconnected():
+                print("Warning: WiFi disconnected after sending data, will reconnect on next cycle")
             
         except Exception as e:
             print(f"\n{'='*50}")
-            print("ERROR in main loop - Rebooting ESP32")
+            print("ERROR in main loop - Continuing to next cycle")
             print(f"{'='*50}")
             print(f"Error: {e}")
             import sys
             sys.print_exception(e)
             print(f"{'='*50}")
-            print("Rebooting in 3 seconds...")
+            print("Waiting before next cycle...")
             print(f"{'='*50}\n")
             
-            # Blink LED rapidly to indicate error before reboot
+            # Blink LED to indicate error
             try:
                 for _ in range(5):
                     led_on()
@@ -1224,8 +1217,9 @@ def main():
             except:
                 pass
             
-            time.sleep(3)
-            reset()
+            # Wait before continuing to next cycle
+            time.sleep(5)
+            # Continue to next cycle instead of rebooting
         
         # Calculate time spent awake and adjust sleep duration
         time_awake = time.time() - cycle_start_time
@@ -1277,25 +1271,32 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"\n{'='*50}")
-        print("FATAL ERROR during initialization - Rebooting ESP32")
+        print("FATAL ERROR during initialization")
         print(f"{'='*50}")
         print(f"Error: {e}")
         import sys
         sys.print_exception(e)
         print(f"{'='*50}")
-        print("Rebooting in 3 seconds...")
+        print("Waiting 10 seconds before retry...")
         print(f"{'='*50}\n")
         
-        # Blink LED rapidly to indicate error before reboot
+        # Blink LED rapidly to indicate error
         try:
             led = Pin(LED_PIN, Pin.OUT)
-            for _ in range(5):
+            for _ in range(10):
                 led.on()
-                time.sleep(0.2)
+                time.sleep(0.5)
                 led.off()
-                time.sleep(0.2)
+                time.sleep(0.5)
         except:
             pass
         
-        time.sleep(3)
-        reset()
+        time.sleep(10)
+        # Retry initialization instead of rebooting
+        try:
+            main()
+        except:
+            # If still failing, just wait and retry again
+            print("Retry failed, waiting 30 seconds...")
+            time.sleep(30)
+            reset()  # Only reboot as last resort after multiple failures
